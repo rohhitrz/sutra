@@ -7,10 +7,10 @@ install:  ## create the venv and install all deps (incl. dev)
 	uv sync --extra dev
 
 up:  ## start Postgres (+ Langfuse with: make up PROFILE=observability)
-	docker compose up -d $(if $(PROFILE),--profile $(PROFILE),)
+	docker compose $(if $(PROFILE),--profile $(PROFILE),) up -d
 
-down:  ## stop the stack
-	docker compose down
+down:  ## stop the stack (all profiles)
+	docker compose --profile observability down
 
 dev:  ## run the API locally with reload
 	uv run uvicorn sutra.api.app:app --reload --host 0.0.0.0 --port 8000
