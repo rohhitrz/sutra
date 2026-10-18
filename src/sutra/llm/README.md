@@ -1,7 +1,5 @@
 # LLM client
 
-> **Status:** stub — filled in Phase 0.
-
 ## Concept
 A single thin client is the only place that talks to an LLM provider.
 

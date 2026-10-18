@@ -1,7 +1,5 @@
 # API
 
-> **Status:** stub — filled in Phase 0.
-
 ## Concept
 The HTTP surface: the same core behind every client.
 

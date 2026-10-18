@@ -1,7 +1,5 @@
 # Database
 
-> **Status:** stub — filled in Phase 0.
-
 ## Concept
 One Postgres instance holds vectors, full-text search, sessions, memory, cache and feedback.
 
