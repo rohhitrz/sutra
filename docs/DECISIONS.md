@@ -1,0 +1,84 @@
+# Sutra — Decisions (ADR log)
+
+> One entry per decision. Never edit an accepted ADR. To change one, add a new ADR that supersedes it.
+> Format: Context → Decision → Why → Tradeoffs.
+
+---
+
+### ADR-001 · Python + FastAPI
+- **Decision:** Python 3.12, FastAPI, async.
+- **Why:** the AI/eval/voice ecosystem (RAGAS, Pipecat, sentence-transformers, the MCP SDK) is most mature in Python.
+- **Tradeoffs:** my TS skills are not exercised here. The NotebookLM-style app already covers TS-side RAG.
+
+### ADR-002 · Postgres + pgvector as the only datastore
+- **Decision:** one Postgres holds vectors, full-text search, sessions, memory, cache, feedback, and ACL.
+- **Why:** fewer moving parts. Hybrid search can be done in SQL. Very common in production.
+- **Tradeoffs:** Postgres FTS is not true BM25 (`ts_rank_cd` is a different scoring). Accepted, and documented in retrieval/README.
+- **Supersedes:** the earlier "Qdrant or pgvector" idea.
+
+### ADR-003 · No LangChain / LlamaIndex for core logic
+- **Decision:** hand-roll chunking, retrieval, fusion, the agent loop, and memory.
+- **Why:** the goal is learning. Frameworks hide exactly the concepts we want to see.
+- **Tradeoffs:** more code. Mitigated by keeping modules small.
+
+### ADR-004 · Local embeddings and reranker
+- **Decision:** `BAAI/bge-small-en-v1.5` (384d) for embeddings, `BAAI/bge-reranker-base` for reranking.
+- **Why:** free, offline, fast enough on CPU for a ~10-file corpus, and reproducible evals.
+- **Tradeoffs:** lower quality than top hosted embedders. The embedder is behind an interface, so it can be swapped later.
+
+### ADR-005 · One thin LLM client
+- **Decision:** `sutra.llm.client` is the only place that calls providers. It handles tracing, cost, retries, timeouts, fallback, and structured output.
+- **Why:** one choke point for observability, cost control, and provider swaps.
+- **Provider:** chosen in Phase 0 (open question). Two model roles from config: `LLM_FAST`, `LLM_STRONG`.
+
+### ADR-006 · Prompts as versioned files
+- **Decision:** `prompts/<name>.v<N>.md`. The active version is set in config and recorded on every message and trace.
+- **Why:** enables A/B testing through evals and reproducibility.
+
+### ADR-007 · Langfuse for observability
+- **Decision:** self-hosted Langfuse in Docker Compose.
+- **Why:** open source, LLM-native (traces, costs, prompt versions, scores), and OpenTelemetry-compatible.
+- **Tradeoffs:** heavier compose stack (Langfuse brings its own services).
+
+### ADR-008 · Evals: custom metrics + LLM judges (RAGAS where it fits)
+- **Decision:** retrieval metrics are hand-written. Generation metrics use versioned judge prompts; RAGAS may be used for cross-checking.
+- **Why:** understand every metric, not just call a library.
+
+### ADR-009 · Hand-rolled agent loop
+- **Decision:** our own tool-calling loop with max steps, cost cap, and corrective-RAG grading. No LangGraph.
+- **Why:** learn the loop mechanics. LangGraph is already used in the Job Application Copilot project.
+
+### ADR-010 · MCP server via official Python SDK, stdio transport
+- **Decision:** expose the 4 agent tools as an MCP server.
+- **Why:** MCP is the current industry standard for tool interoperability. Testable from Claude Desktop.
+
+### ADR-011 · Voice: DIY first, then Pipecat; Gemini Live only as a comparison
+- **Decision:** 8a DIY push-to-talk, 8b Pipecat real-time, 8c Gemini Live experiment.
+- **Why:** DIY teaches the mechanics. Pipecat is pure Python, open source, and provider-agnostic, with no extra server (unlike LiveKit). Speech-to-speech skips our text-layer guardrails and tracing, so it is a comparison point, not the main path.
+- **Providers:** decided in Phase 8 after checking current pricing (candidates: Groq Whisper or Deepgram for STT; Kokoro local or a cheap cloud TTS).
+
+### ADR-012 · Semantic cache in Postgres
+- **Decision:** pgvector table; threshold 0.95; keyed also by prompt_version, index_version, model; per-user scope.
+- **Why:** shows cache correctness issues (stale answers, cross-user leaks) and how versioning fixes them.
+
+### ADR-013 · Memory: window + rolling summary + long-term facts
+- **Decision:** as in ARCHITECTURE §6.
+- **Why:** this is the context management concept. It is measurable (tokens saved, answer quality over long chats).
+
+### ADR-014 · Fictional corpus written by the LLM in Phase 1, then frozen
+- **Decision:** 10 markdown files with planted traps. Frozen after Phase 1; changes need my OK, because they invalidate the eval baselines.
+
+### ADR-015 · Tooling: uv, ruff, pyright, pytest, Alembic, Makefile
+- **Decision:** as listed.
+- **Why:** modern, fast, and standard in 2026 Python projects.
+
+### ADR-016 · Public GitHub repo, Conventional Commits, push per step
+- **Decision:** public repo `sutra` created with `gh` in Phase 0. Conventional Commits per logical step, pushed to `main`. No AI co-author trailers or attribution.
+- **Why:** the repo is a portfolio piece; a clean, readable history shows how the system was built step by step.
+
+---
+
+## Open questions (resolve in the phase noted)
+- [ ] Phase 0: which LLM provider(s) for `LLM_FAST` / `LLM_STRONG`?
+- [ ] Phase 6: which classifier for injection detection — LLM-based only, or also a small local model?
+- [ ] Phase 8: STT/TTS providers (after a pricing check)
