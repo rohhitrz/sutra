@@ -1,0 +1,90 @@
+[project]
+name = "sutra"
+version = "0.1.0"
+description = "Production-style learning codebase: advanced RAG, guardrails, observability & evals, agentic RAG, MCP and voice agents."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+    # --- API layer (ADR-001) ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # --- Postgres + pgvector, the only datastore (ADR-002) ---
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3.6",
+    # --- LLM provider (ADR-017) ---
+    "openai>=1.57",
+    # --- YAML: prompt front-matter and eval profiles (ADR-006, ADR-008) ---
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8",
+    "pyright>=1.1.389",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sutra"]
+
+# ---------------------------------------------------------------------------
+# ruff — lint + format (ADR-015)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # flake8-bugbear
+    "UP",       # pyupgrade
+    "ASYNC",    # flake8-async — catches blocking calls in async code
+    "ANN",      # flake8-annotations — type hints everywhere (CLAUDE.md)
+    "RUF",
+]
+ignore = [
+    "ANN401",  # allow typing.Any where a boundary genuinely needs it
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]           # test functions need no return annotations
+"src/sutra/db/migrations/**" = ["ANN", "E501"]  # Alembic generates these
+
+[tool.ruff.lint.isort]
+known-first-party = ["sutra"]
+
+# ---------------------------------------------------------------------------
+# pyright — type checking (ADR-015)
+# ---------------------------------------------------------------------------
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["**/__pycache__", "src/sutra/db/migrations/versions"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportMissingTypeStubs = false
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+markers = [
+    "integration: needs a running Postgres (deselect with -m 'not integration')",
+]
