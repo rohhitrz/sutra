@@ -98,7 +98,8 @@
 ### ADR-018 · Concrete runtime dependency set
 - **Decision:** beyond the tooling in ADR-015, the runtime deps are `fastapi`, `uvicorn`,
   `pydantic`, `pydantic-settings`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pgvector`,
-  `openai` and `pyyaml`.
+  `openai` and `pyyaml`. Dev-only: `httpx2` (the HTTP client the `openai` SDK is built on,
+  reused for the ASGI test client so tests never mix two httpx major versions).
 - **Why:** each one is implied by an existing ADR rather than a new choice — `asyncpg` and
   `sqlalchemy[asyncio]` by ADR-001's async requirement, `pgvector` by ADR-002, `alembic` by
   ADR-015, `pyyaml` by ADR-006's prompt front-matter and ADR-008's eval profile files.

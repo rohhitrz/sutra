@@ -28,7 +28,9 @@ dev = [
     "pyright>=1.1.389",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "httpx>=0.28",
+    # httpx2, not httpx: the openai SDK is built on httpx2, and tests construct real
+    # provider error objects. Mixing the two produces mismatched Request/Response types.
+    "httpx2>=2.14",
 ]
 
 [build-system]
@@ -62,8 +64,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN"]           # test functions need no return annotations
+# ANN: test functions need no return annotations.
+# ASYNC109: the fake adapter must mirror the LLMAdapter protocol, timeout parameter included.
+"tests/**" = ["ANN", "ASYNC109"]
 "src/sutra/db/migrations/**" = ["ANN", "E501"]  # Alembic generates these
+# ASYNC109 wants asyncio.timeout instead of a `timeout` parameter. Here the value is
+# delegated to the provider SDK, which applies it per request (connect included) and can
+# retry within it — strictly better than wrapping the call in an outer cancel scope.
+"src/sutra/llm/adapters.py" = ["ASYNC109"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["sutra"]
