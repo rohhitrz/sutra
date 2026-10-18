@@ -76,9 +76,49 @@
 - **Decision:** public repo `sutra` created with `gh` in Phase 0. Conventional Commits per logical step, pushed to `main`. No AI co-author trailers or attribution.
 - **Why:** the repo is a portfolio piece; a clean, readable history shows how the system was built step by step.
 
+### ADR-017 · LLM provider: OpenAI, `gpt-6-luna` for both model roles
+- **Decision:** OpenAI is the provider. `LLM_FAST` and `LLM_STRONG` both resolve to `gpt-6-luna`.
+  They stay two separate config values, so a later phase can split them without a code change.
+  Adds the `openai` SDK as a dependency.
+- **Why:** verified against OpenAI's own pricing page at $0.10 / $0.50 per 1M input / output tokens
+  ($0.01 cached), which puts the whole project's eval budget in the $5–10 range. Cost matters here
+  more than raw capability: `make eval` is ~250 calls and Phase 3 re-runs it after each of seven
+  retrieval steps, so the model choice is dominated by eval volume, not by chat traffic.
+- **Tradeoffs:** `gpt-6-luna` is a small model, and three places will feel it —
+  (1) Phase 7's hand-rolled agent loop depends on reliable tool-calling,
+  (2) Phase 6's guardrail classification depends on schema adherence, and
+  (3) with no separate `LLM_JUDGE` role, eval judges run on `LLM_STRONG`, so the model judges its
+  own answers. Same-family self-evaluation is known to inflate faithfulness scores, which means the
+  absolute judge numbers on the scoreboard should be read as **relative** — good for comparing
+  profiles against each other, not as ground truth. Also: with both roles on one model, the fallback
+  chain and Phase 5's model routing are structurally present but functionally no-ops until a second
+  model is configured.
+- **Supersedes:** the "Provider: chosen in Phase 0 (open question)" line in ADR-005.
+
+### ADR-018 · Concrete runtime dependency set
+- **Decision:** beyond the tooling in ADR-015, the runtime deps are `fastapi`, `uvicorn`,
+  `pydantic`, `pydantic-settings`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pgvector`,
+  `openai` and `pyyaml`.
+- **Why:** each one is implied by an existing ADR rather than a new choice — `asyncpg` and
+  `sqlalchemy[asyncio]` by ADR-001's async requirement, `pgvector` by ADR-002, `alembic` by
+  ADR-015, `pyyaml` by ADR-006's prompt front-matter and ADR-008's eval profile files.
+- **Tradeoffs:** none significant. Recorded explicitly because CLAUDE.md requires sign-off on any
+  dependency not already listed in DECISIONS, and ADR-015 covered only the dev toolchain.
+
+### ADR-019 · Eval runs are exempt from the bulk-API-usage rule
+- **Decision:** `make eval` may exceed the ">200 LLM calls in one run needs explicit OK" rule in
+  CLAUDE.md without asking each time. Anything outside the eval runner still needs sign-off.
+- **Why:** one eval run is ~250 calls by construction (~40 golden questions × one answer plus
+  roughly three judges, plus query transforms). Phase 3 runs it after every retrieval change. Asking
+  each time would make the measure-everything workflow unusable, and at ADR-017's prices a run costs
+  well under a cent.
+- **Tradeoffs:** removes a cost guardrail on the single highest-volume code path. Mitigated by the
+  per-call cost accounting in `sutra.llm.client`, which makes actual spend per run visible, and by
+  keeping the exemption scoped to the eval runner only.
+
 ---
 
 ## Open questions (resolve in the phase noted)
-- [ ] Phase 0: which LLM provider(s) for `LLM_FAST` / `LLM_STRONG`?
+- [x] Phase 0: which LLM provider(s) for `LLM_FAST` / `LLM_STRONG`? → **ADR-017** (OpenAI, `gpt-6-luna` for both)
 - [ ] Phase 6: which classifier for injection detection — LLM-based only, or also a small local model?
 - [ ] Phase 8: STT/TTS providers (after a pricing check)
