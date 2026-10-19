@@ -3,14 +3,14 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 1 — Corpus + golden datasets** · Status: not started
+**Phase 1 — Corpus + golden datasets** · Status: 🟨 in progress (step 1 written, awaiting review)
 
 ## Phase status
 
 | # | Phase | Status | Chat date |
 |---|---|---|---|
 | 0 | Foundation | ✅ done | 2026-10-19 |
-| 1 | Corpus + golden datasets | ⬜ not started | |
+| 1 | Corpus + golden datasets | 🟨 in progress | 2026-10-19 |
 | 2 | Ingestion + naive RAG + eval harness | ⬜ | |
 | 3 | Advanced retrieval + routing + semantic cache | ⬜ | |
 | 4 | Observability | ⬜ | |
@@ -95,9 +95,15 @@ comparing profiles against each other, not as ground truth.
 
 ## Next step
 
-Start **Phase 1 — Corpus + golden datasets** with the opening prompt in `docs/BUILD_PLAN.md`.
-Step 1 is `docs/world_bible.md` plus the trap map only — stop for review before writing any
-corpus files.
+**Phase 1 step 1 is written and waiting on review:** `docs/world_bible.md` and the trap map
+`evals/datasets/README.md`, reviewed and committed.
+
+Review those two files. On approval, Phase 1 continues with:
+1. the 10 corpus files in `data/corpus/` per SPEC §4 and world bible §7
+2. `evals/datasets/golden_qa.jsonl` (~42 rows) and `attacks.jsonl` (~40 rows) against the
+   reserved ids in the trap map
+3. the validator script — every golden quote exists verbatim in its named corpus file
+4. freeze the corpus (ADR-014)
 
 Before Phase 2: copy `.env.example` to `.env` and set a real `OPENAI_API_KEY`.
 
@@ -105,6 +111,13 @@ Before Phase 2: copy `.env.example` to `.env` and set a real `OPENAI_API_KEY`.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-19 — Phase 1 — step 1 written, awaiting review.**
+  Designed "The Meridian Chronicles": 40 numbered waystones between Halvern Reach and Kesh Ithar,
+  Book 1 in 1143 and Book 2 in 1144. Wrote `docs/world_bible.md` (world, cast, factions, timeline,
+  the ten-file map) and `evals/datasets/README.md` (the trap map, with reserved `gq-`/`atk-` ids).
+  Planted trap counts exceed SPEC §4: 5 Book 2 updates, 7 multi-hop facts, 3 injections, 4 fake PII
+  items, 6 unanswerables. No corpus files written — the freeze waits on review.
 
 - **2026-10-19 — Phase 0 — Foundation. Done.**
   Resolved the LLM provider open question (ADR-017: OpenAI `gpt-6-luna` for both roles, chosen on
