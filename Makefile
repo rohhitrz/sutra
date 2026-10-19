@@ -1,4 +1,4 @@
-.PHONY: help up down dev ingest eval test lint fmt migrate revision install
+.PHONY: help up down dev ingest eval validate test lint fmt migrate revision install
 
 help:  ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -27,14 +27,17 @@ ingest:  ## ingest data/corpus into Postgres
 eval:  ## run the eval suite, write a report to evals/reports/
 	uv run python -m evals.runners.run
 
+validate:  ## check the golden datasets against the frozen corpus
+	uv run python -m evals.validate_datasets
+
 test:  ## run the test suite
 	uv run pytest
 
 lint:  ## ruff (lint + format check) and pyright
-	uv run ruff check src tests
-	uv run ruff format --check src tests
+	uv run ruff check src tests evals
+	uv run ruff format --check src tests evals
 	uv run pyright
 
 fmt:  ## apply ruff formatting and autofixes
-	uv run ruff check --fix src tests
-	uv run ruff format src tests
+	uv run ruff check --fix src tests evals
+	uv run ruff format src tests evals

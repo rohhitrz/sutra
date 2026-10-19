@@ -46,7 +46,7 @@ packages = ["src/sutra"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "tests", "evals"]
 
 [tool.ruff.lint]
 select = [
@@ -80,7 +80,7 @@ known-first-party = ["sutra"]
 # pyright — type checking (ADR-015)
 # ---------------------------------------------------------------------------
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "evals"]
 exclude = ["**/__pycache__", "src/sutra/db/migrations/versions"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
