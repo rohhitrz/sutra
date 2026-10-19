@@ -3,15 +3,15 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 1 — Corpus + golden datasets** · Status: 🟨 in progress (world bible, trap map and all 10 corpus files written)
+**Phase 2 — Ingestion + naive RAG + eval harness** · Status: ⬜ not started
 
 ## Phase status
 
 | # | Phase | Status | Chat date |
 |---|---|---|---|
 | 0 | Foundation | ✅ done | 2026-10-19 |
-| 1 | Corpus + golden datasets | 🟨 in progress | 2026-10-19 |
-| 2 | Ingestion + naive RAG + eval harness | ⬜ | |
+| 1 | Corpus + golden datasets | ✅ done | 2026-10-19 |
+| 2 | Ingestion + naive RAG + eval harness | ⬜ not started | |
 | 3 | Advanced retrieval + routing + semantic cache | ⬜ | |
 | 4 | Observability | ⬜ | |
 | 5 | Generation, context management, memory | ⬜ | |
@@ -44,6 +44,20 @@ comparing profiles against each other, not as ground truth.
 - **ADR-019** — `make eval` is exempt from the ">200 LLM calls needs explicit OK" rule, which one
   eval run exceeds by construction.
 
+## What was built (Phase 1)
+
+- `docs/world_bible.md` — the design record for "The Meridian Chronicles"
+- `data/corpus/` — the **10 frozen corpus files** (100–200 lines each, full YAML front-matter),
+  plus `README.md`, the freeze notice
+- `evals/datasets/golden_qa.jsonl` — 42 rows, 72 verbatim source quotes
+- `evals/datasets/attacks.jsonl` — 40 rows (30 attacks + 10 benign look-alikes)
+- `evals/datasets/README.md` — the trap map: every trap, the row that tests it, and what a wrong
+  answer looks like
+- `evals/validate_datasets.py` + `make validate` — six checks, including the quote check
+- `tests/test_datasets.py` — 7 tests, including a negative control that proves the validator fails
+  on an invented quote
+- `evals` added to the ruff and pyright paths
+
 ## What was built (Phase 0)
 
 - `pyproject.toml` (Python 3.12 pinned), ruff + pyright config, `Makefile` (12 targets),
@@ -73,6 +87,11 @@ comparing profiles against each other, not as ground truth.
 
 ## Known issues / tech debt
 
+0. **The corpus is frozen.** Editing `data/corpus/` invalidates every eval baseline from Phase 2
+   on and can orphan one of the 72 cited quotes. If it must change: `make validate`, repair the
+   quotes, re-run `make eval`, and record a new baseline saying why the old numbers no longer
+   compare.
+
 1. **No real LLM call has ever been made.** There is no `.env` yet and the client tests use a fake
    adapter. The OpenAI adapter's request shape is written against the installed SDK (3.35.1,
    Responses API) but is **unverified against the live API**. First real call happens in Phase 2 —
@@ -95,30 +114,32 @@ comparing profiles against each other, not as ground truth.
 
 ## Next step
 
-Phase 1 steps 1–2 are done and committed: `docs/world_bible.md`, the trap map
-`evals/datasets/README.md`, and all **10 corpus files** in `data/corpus/`.
+**Phase 1 is done and the corpus is frozen** (ADR-014, notice in `data/corpus/README.md`).
+Start **Phase 2 — Ingestion + naive RAG + eval harness** with the opening prompt in
+`docs/BUILD_PLAN.md`.
 
-**The corpus is written but not yet frozen.** Freezing (ADR-014) waits on the datasets, because
-writing the questions is what shakes out any fact that cannot actually be cited. Remaining:
+Two things to do before the first retrieval code:
 
-1. `evals/datasets/golden_qa.jsonl` — ~42 rows against the reserved `gq-` ids in the trap map
-2. `evals/datasets/attacks.jsonl` — ~40 rows against the reserved `atk-` ids (30 attacks + 10 benign)
-3. the validator script — every `source_chunks[].quote` must exist verbatim in its named corpus file
-4. then freeze the corpus
+1. copy `.env.example` to `.env` and set a real `OPENAI_API_KEY` — **no live LLM call has been
+   made in this project yet**, so budget time to debug the OpenAI adapter in Phase 2, not the
+   retrieval logic (known issue 1);
+2. `make ingest` has no implementation yet. It must skip `data/corpus/README.md`, which is the
+   freeze notice and not a corpus document — the validator skips it the same way.
 
-Figures the datasets must use (computed from the written rows, not from the world bible):
-
-- Waystone Tithe, 14 wagons, waystones 1–17: **476 tenth-marks** at the 1053 schedule,
-  **224** under the Kesh Ithar Accord. 238 is the wrong answer that means the 1–16 restriction was missed.
-- Ledger: salt blocks across 1143 = **2,750** tenth-marks; Emberwane 1143, all goods = **2,564**.
-  Brass blanks Dustfall 1143 = 540 against Hollow 1144 = 675.
-
-Before Phase 2: copy `.env.example` to `.env` and set a real `OPENAI_API_KEY`.
+The eval harness has ground truth waiting for it: 42 golden rows over six categories and 40 attack
+rows, with the trap-to-row map in `evals/datasets/README.md`.
 
 ---
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-19 — Phase 1 — done. Corpus frozen.**
+  Wrote both golden datasets against the reserved ids in the trap map, and the validator that
+  makes the freeze meaningful: all 72 cited quotes were found verbatim on the first run. Added
+  `make validate`, seven tests including a negative control for the validator itself, and put
+  `evals` under ruff and pyright. 48 tests pass, lint clean. No eval numbers yet — Phase 2 builds
+  the harness that produces them.
 
 - **2026-10-19 — Phase 1 — corpus written (steps 1–2).**
   World bible and trap map approved and committed, then all 10 corpus files written per SPEC §4,
