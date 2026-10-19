@@ -8,14 +8,17 @@ baseline is pinned to — which is the very property they are testing.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from sutra.config import Settings
 from sutra.db.engine import get_engine, get_sessionmaker
 from sutra.db.models import Chunk as ChunkRow
 from sutra.ingestion.chunk import estimate_tokens
+from sutra.ingestion.fingerprint import build_fingerprint
+from sutra.ingestion.parse import parse_corpus
 from sutra.ingestion.run import IngestionBlocked, IngestionSummary, ingest
 
 pytestmark = pytest.mark.integration
@@ -147,6 +150,42 @@ async def test_the_stored_fingerprint_round_trips(settings: Settings, clean_slot
     assert stored["chunk_tokens"] == settings.chunk_tokens
     assert stored["embedding_model"] == settings.embedding_model
     assert summary.fingerprint
+
+
+async def test_a_fingerprint_from_an_older_schema_is_refused_not_crashed(
+    settings: Settings, clean_slot: None
+):
+    """The fingerprint is persisted data, so its schema outlives the code that wrote it.
+
+    ADR-022 added `chunker_version`; every slot written before it holds a dict that no longer
+    validates. Reading one must refuse cleanly, because a ValidationError traceback out of
+    `make ingest` tells you nothing about what to do next.
+    """
+    first = await _ingest(settings)
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        legacy = {
+            k: v
+            for k, v in build_fingerprint(settings, parse_corpus(Path("data/corpus")))
+            .model_dump()
+            .items()
+            if k != "chunker_version"
+        }
+        await session.execute(
+            update(ChunkRow)
+            .where(ChunkRow.index_version == TEST_SLOT)
+            .values(meta={"index_fingerprint": legacy})
+        )
+        await session.commit()
+
+    with pytest.raises(IngestionBlocked, match=r"older schema.*chunker_version"):
+        await _ingest(settings)
+    assert await _chunk_count(TEST_SLOT) == first.chunks, "the slot must be untouched"
+
+    # ...and --force is the documented way out.
+    forced = await _ingest(settings, force=True)
+    assert forced.status == "ingested"
 
 
 async def test_tsvector_and_embedding_are_populated(settings: Settings, clean_slot: None):

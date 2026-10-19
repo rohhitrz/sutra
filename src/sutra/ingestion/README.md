@@ -38,7 +38,10 @@ module is built to make impossible:
   `{chunk_strategy, chunk_tokens, chunk_overlap, embedding_model, corpus_hash}`, stored in
   `chunks.metadata`. Same fingerprint in the slot → no-op. Different fingerprint → refused, with
   the differing parameters named. Different slot → both kept, which is how Phase 3 compares
-  chunking schemes. `tsv` is computed by Postgres in one set-based `UPDATE`, since it is derived
+  chunking schemes. The fingerprint also carries `chunker_version` (ADR-022), so a change to the
+  chunker's *code* invalidates the slot too — without it, a chunker bug fix re-chunks every
+  document while the fingerprint stays identical, and `make ingest` calls that a no-op. A stored
+  fingerprint from an older schema is refused rather than parsed, since it cannot be compared. `tsv` is computed by Postgres in one set-based `UPDATE`, since it is derived
   data and the `english` configuration has to resolve where the matching query will resolve it.
 
 Phase 2 writes **flat** chunks: `parent_id` and `context_prefix` stay NULL. Parent-child retrieval
@@ -50,10 +53,10 @@ measures what they are worth.
   with 60 overlap is a starting point, not a finding — Phase 3 measures it rather than arguing it.
 - The slot number is chosen by a human, so bumping it is a thing you can forget. The fingerprint
   mismatch error is the mitigation, turning a forgotten bump into a loud failure at ingest time.
-- **The fingerprint covers parameters, not code.** Fixing a bug in the chunker changes its output
-  without changing the fingerprint, so `make ingest` will report "nothing to do" over stale
-  chunks. Use `--force` after any change to chunking behaviour. See the known issues in
-  `PROGRESS.md`.
+- `CHUNKER_VERSION` (ADR-022) is bumped by hand, so it can be forgotten. Deriving it from the
+  chunker's source would catch that but would also fire on a comment edit, making every refactor
+  look like a re-index — a deliberate human signal is the better trade. Bumping it invalidates
+  every existing slot by design, at the cost of one `--force` re-ingest.
 - Heading metadata reads h2 and h3 but not h1. Two corpus documents section on h3, and one
   (`08_faq`) has no headings below its title at all, so six chunks legitimately carry no heading.
 

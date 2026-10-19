@@ -19,9 +19,9 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +45,20 @@ CHUNKS_TABLE = cast(Table, ChunkRow.__table__)
 # "waystones" matches "waystone". Unused by Phase 2's vector-only retrieval, but built now
 # because Phase 3's hybrid search needs it and backfilling it later is a re-ingest.
 TSV_CONFIG = "english"
+
+
+class OccupiedSlot(BaseModel):
+    """What is already sitting in an index slot.
+
+    `fingerprint` is None when the stored value cannot be parsed as a current fingerprint — an
+    index written before a field was added to the schema, for instance. That is a third state,
+    distinct from "slot empty" and "slot matches", and it has to be refused rather than crash:
+    the fingerprint is persisted data, so its schema outlives the code that wrote it. ADR-022
+    adding `chunker_version` is exactly this case.
+    """
+
+    raw: dict[str, Any]
+    fingerprint: IndexFingerprint | None
 
 
 class IngestionSummary(BaseModel):
@@ -86,13 +100,11 @@ def _validate_row_keys(rows: list[dict[str, object]]) -> None:
             raise ValueError(msg)
 
 
-async def _occupied_fingerprint(
-    session: AsyncSession, index_version: int
-) -> IndexFingerprint | None:
-    """The fingerprint already stored in this slot, if anything is there.
+async def _occupied_slot(session: AsyncSession, index_version: int) -> OccupiedSlot | None:
+    """Read back whatever fingerprint this slot holds, tolerating an older schema.
 
-    The whole fingerprint is read back, not just its digest, so a mismatch can report which
-    parameter changed instead of two opaque hashes.
+    The whole fingerprint is read, not just its digest, so a mismatch can report which parameter
+    changed instead of two opaque hashes.
     """
     stmt = (
         select(ChunkRow.meta["index_fingerprint"])
@@ -102,7 +114,10 @@ async def _occupied_fingerprint(
     stored = (await session.execute(stmt)).scalar_one_or_none()
     if stored is None:
         return None
-    return IndexFingerprint.model_validate(stored)
+    try:
+        return OccupiedSlot(raw=stored, fingerprint=IndexFingerprint.model_validate(stored))
+    except ValidationError:
+        return OccupiedSlot(raw=stored, fingerprint=None)
 
 
 async def _upsert_documents(
@@ -158,9 +173,14 @@ async def ingest(
 
     factory = get_sessionmaker()
     async with factory() as session:
-        occupied = await _occupied_fingerprint(session, slot)
+        occupied = await _occupied_slot(session, slot)
+        matches = (
+            occupied is not None
+            and occupied.fingerprint is not None
+            and (occupied.fingerprint.digest == fingerprint.digest)
+        )
 
-        if occupied is not None and occupied.digest == fingerprint.digest and not force:
+        if matches and not force:
             # The whole point of the fingerprint: this is the common case when you run
             # `make ingest` twice, and it must be free.
             return IngestionSummary(
@@ -171,7 +191,7 @@ async def ingest(
                 chunks=0,
             )
 
-        if occupied is not None and occupied.digest != fingerprint.digest and not force:
+        if occupied is not None and not matches and not force:
             raise IngestionBlocked(_blocked_message(slot, occupied, fingerprint))
 
         if occupied is not None:
@@ -232,15 +252,25 @@ async def ingest(
     )
 
 
-def _blocked_message(slot: int, occupied: IndexFingerprint, fingerprint: IndexFingerprint) -> str:
-    changes = "\n".join(f"  {line}" for line in fingerprint.differences_from(occupied))
-    return (
-        f"index slot {slot} already holds a different index "
-        f"(stored {occupied.digest}, computed {fingerprint.digest}).\n"
-        f"What changed:\n{changes}\n"
+def _blocked_message(slot: int, occupied: OccupiedSlot, fingerprint: IndexFingerprint) -> str:
+    refusal = (
         "Refusing to overwrite: any eval baseline recorded against this slot would silently "
         "stop comparing.\n"
         "Either bump INDEX_VERSION to keep both, or re-run with --force to replace it."
+    )
+    if occupied.fingerprint is None:
+        missing = sorted(set(IndexFingerprint.model_fields) - set(occupied.raw))
+        return (
+            f"index slot {slot} holds a fingerprint written by an older schema "
+            f"(missing {missing}), so it cannot be compared to the current one.\n"
+            f"{refusal}"
+        )
+    changes = "\n".join(f"  {line}" for line in fingerprint.differences_from(occupied.fingerprint))
+    return (
+        f"index slot {slot} already holds a different index "
+        f"(stored {occupied.fingerprint.digest}, computed {fingerprint.digest}).\n"
+        f"What changed:\n{changes}\n"
+        f"{refusal}"
     )
 
 

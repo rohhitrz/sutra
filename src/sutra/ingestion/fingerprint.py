@@ -15,6 +15,7 @@ import json
 from pydantic import BaseModel
 
 from sutra.config import Settings
+from sutra.ingestion.chunk import CHUNKER_VERSION
 from sutra.ingestion.parse import ParsedDocument, corpus_hash
 
 
@@ -24,6 +25,10 @@ class IndexFingerprint(BaseModel):
     chunk_strategy: str
     chunk_tokens: int
     chunk_overlap: int
+    # The chunker's own version (ADR-022). Parameters alone cannot tell you whether the code that
+    # applied them has changed, and a chunker change is exactly as index-invalidating as a
+    # parameter change.
+    chunker_version: int
     embedding_model: str
     corpus_hash: str
 
@@ -48,6 +53,7 @@ def build_fingerprint(settings: Settings, documents: list[ParsedDocument]) -> In
         chunk_strategy=settings.chunk_strategy,
         chunk_tokens=settings.chunk_tokens,
         chunk_overlap=settings.chunk_overlap,
+        chunker_version=CHUNKER_VERSION,
         embedding_model=settings.embedding_model,
         corpus_hash=corpus_hash(documents),
     )

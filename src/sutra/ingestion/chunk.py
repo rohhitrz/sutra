@@ -23,6 +23,16 @@ from collections.abc import Callable, Sequence
 
 from pydantic import BaseModel
 
+# # CONCEPT: The index fingerprint has to cover the *code* that built the index, not only the
+# # parameters passed to it (ADR-022). Without this, fixing a chunker bug changes every chunk
+# # while leaving the fingerprint identical — so `make ingest` reports "nothing to do" and the
+# # stale index stays in place, still carrying an eval baseline that no longer describes it.
+#
+# Bump this whenever a change can alter chunker output. Not for comments, renames or type hints.
+#   1 — Phase 2: recursive split on h2/h3/paragraph/line/sentence/word, merge-up, tail overlap,
+#       h2+h3 heading capture.
+CHUNKER_VERSION = 1
+
 TokenCounter = Callable[[str], int]
 
 # An h2 or h3 at the start of a line. Both levels count because the corpus is not uniform: most

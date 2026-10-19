@@ -175,6 +175,37 @@
 - **Clarifies:** ARCHITECTURE §3's `index_version` wording, which was looser than the §12 schema
   it has to live in.
 
+### ADR-022 · Amends ADR-021: fingerprint storage, and the code that produced the index
+- **Context:** implementing ADR-021 showed two faults in it, both found by building the thing
+  rather than by reasoning about it.
+- **Decision 1 — the fingerprint lives in `chunks.metadata` only.** ADR-021 said
+  "`documents.metadata` and `chunks.metadata`". That is wrong: a `documents` row is shared by
+  every index slot, so one `06_places_wiki` row serves slot 1 and slot 2 at once and a per-slot
+  fingerprint stored on it would be ambiguous at best. Chunks are per-slot, so the fingerprint
+  belongs there and nowhere else. `documents.metadata` keeps the document's own front-matter.
+- **Decision 2 — the fingerprint includes `chunker_version`.** ADR-021's field list covered the
+  chunking *parameters* but not the *code* that applies them, which leaves a silent trap:
+
+  > While building Phase 2, a bug fix in the heading scan changed the chunker's output for all ten
+  > documents. The parameters had not changed, so the fingerprint had not changed, so `make ingest`
+  > reported "nothing to do" and left the stale chunks in place. The fix had to be applied with
+  > `--force`, and nothing in the system would have said so.
+
+  `CHUNKER_VERSION`, a constant in `sutra.ingestion.chunk`, is bumped whenever a change can alter
+  chunker output. It then flows into the fingerprint, so re-ingesting after a chunker change is
+  refused with `chunker_version: 1 -> 2` instead of being mistaken for a no-op.
+- **Why:** the fingerprint's job is to answer "is the index in this slot the one my eval baseline
+  was measured against?". A fingerprint that ignores the code producing the index cannot answer
+  that, which was the whole point of ADR-021.
+- **Tradeoffs:** `CHUNKER_VERSION` is bumped by hand, so it can be forgotten — the same class of
+  problem as the slot number, and mitigated the same way, by failing loudly at ingest time once it
+  *is* bumped. Deriving it automatically (hashing the chunker's source, say) would catch a
+  forgotten bump but also fire on a comment edit or a rename, making every refactor look like a
+  re-index. A deliberate human signal is the better trade here. Bumping the constant invalidates
+  every existing slot by design, which is the correct outcome and costs one `--force` re-ingest.
+- **Amends:** ADR-021 (storage location, and the fingerprint field list). ADR-021 otherwise stands:
+  `index_version` remains an integer slot, with the same no-op / refuse / coexist behaviour.
+
 ---
 
 ## Open questions (resolve in the phase noted)

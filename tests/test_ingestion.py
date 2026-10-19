@@ -14,6 +14,7 @@ import pytest
 
 from sutra.config import Settings
 from sutra.ingestion.chunk import (
+    CHUNKER_VERSION,
     DEFAULT_SEPARATORS,
     chunk_document,
     estimate_tokens,
@@ -215,6 +216,7 @@ def _fingerprint(**overrides: object) -> IndexFingerprint:
         "chunk_strategy": "recursive",
         "chunk_tokens": 400,
         "chunk_overlap": 60,
+        "chunker_version": 1,
         "embedding_model": "BAAI/bge-small-en-v1.5",
         "corpus_hash": "abc123",
     }
@@ -227,6 +229,7 @@ def test_digest_is_stable_and_field_order_independent():
         {
             "corpus_hash": "abc123",
             "embedding_model": "BAAI/bge-small-en-v1.5",
+            "chunker_version": 1,
             "chunk_overlap": 60,
             "chunk_tokens": 400,
             "chunk_strategy": "recursive",
@@ -236,12 +239,22 @@ def test_digest_is_stable_and_field_order_independent():
 
 
 @pytest.mark.parametrize(
-    "field", ["chunk_strategy", "chunk_tokens", "chunk_overlap", "embedding_model", "corpus_hash"]
+    "field",
+    [
+        "chunk_strategy",
+        "chunk_tokens",
+        "chunk_overlap",
+        "chunker_version",
+        "embedding_model",
+        "corpus_hash",
+    ],
 )
 def test_every_field_changes_the_digest(field: str):
     """If a field could change without changing the digest, an eval baseline could silently stop
     describing the index it was measured on."""
-    changed = {"chunk_tokens": 250, "chunk_overlap": 20}.get(field, "different")
+    changed = {"chunk_tokens": 250, "chunk_overlap": 20, "chunker_version": 99}.get(
+        field, "different"
+    )
     assert _fingerprint(**{field: changed}).digest != _fingerprint().digest
 
 
@@ -255,6 +268,8 @@ def test_build_fingerprint_reads_the_chunking_settings(settings: Settings):
     assert fp.chunk_tokens == settings.chunk_tokens
     assert fp.chunk_overlap == settings.chunk_overlap
     assert fp.embedding_model == settings.embedding_model
+    # Not a setting: it comes from the code, which is the point of ADR-022.
+    assert fp.chunker_version == CHUNKER_VERSION
 
 
 # ---------------------------------------------------------------------------
