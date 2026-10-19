@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     # ---- Retrieval / ingestion ----
     # # CONCEPT: Index versioning — re-ingesting under a new version lets old chunks keep serving
     # # traffic until the new index is ready, and keeps eval baselines pinned to a known index.
+    # An integer *slot*, not a hash (ADR-021): 1 = Phase 2 naive recursive chunking. The derived
+    # fingerprint of the chunking parameters lives in `chunks.metadata`, and ingestion refuses to
+    # write mismatched parameters into an occupied slot rather than silently re-chunking it.
     index_version: int = 1
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dims: int = 384

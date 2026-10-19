@@ -117,6 +117,64 @@
   per-call cost accounting in `sutra.llm.client`, which makes actual spend per run visible, and by
   keeping the exemption scoped to the eval runner only.
 
+### ADR-020 · `fastembed` (ONNX) is the local embedding runtime, not `sentence-transformers`
+- **Context:** ADR-004 fixed the *models* (`bge-small-en-v1.5`, `bge-reranker-base`) but never the
+  library that executes them. CLAUDE.md's stack line said "via `sentence-transformers`", and
+  ADR-018's dependency set omitted it entirely, so the runtime was never actually decided.
+- **Decision:** run both models through `fastembed` (ONNX Runtime). `sentence-transformers` is not
+  installed. The models themselves are unchanged, so ADR-004 stands in full.
+- **Why:** `sentence-transformers` requires PyTorch, which is a complete training framework —
+  autograd, GPU kernels, thousands of compiled operators. Sutra needs exactly one capability from
+  it: a single forward pass over a frozen 67 MB model, on CPU, once per chunk. It never trains
+  anything. Measured on this machine, the two routes cost:
+
+  | route | engine | `.venv` growth |
+  |---|---|---|
+  | `sentence-transformers` | PyTorch + transformers + scipy + scikit-learn | ~500 MB (est.) |
+  | `fastembed` | ONNX Runtime | **141 MB (measured)** |
+
+  Identical weights, identical 384 dimensions, identical vectors, so eval baselines are unaffected
+  by the choice.
+- **Verified before accepting:** `BAAI/bge-small-en-v1.5` is a supported fastembed model at
+  `dim=384`, returns **L2-normalised** vectors (which is what makes `vector_cosine_ops` on the HNSW
+  index correct), and `BAAI/bge-reranker-base` is one of 8 supported cross-encoders — so Phase 3's
+  reranker needs no second runtime. Cold load 9.7 s including download; 3 texts in 8 ms after that.
+- **Tradeoffs:** fastembed exposes a smaller surface than `sentence-transformers` — no fine-tuning,
+  no pooling-strategy knobs, and a fixed list of 41 supported models (extensible via
+  `add_custom_model`). None of that is wanted here; a model swap stays a one-line change because
+  the embedder sits behind an interface, per ADR-004. ONNX Runtime also pulls `numpy`, `pillow`,
+  `protobuf`, `tokenizers`, `huggingface-hub`, `loguru`, `mmh3`, `py-rust-stemmers` and `requests`
+  as transitive dependencies.
+- **Operational note:** model weights are **not** installed by the package manager. They download
+  on first use into `Settings.model_cache_dir` (`./.models_cache`, 64 MB, gitignored), so they live
+  in the project folder rather than the home directory.
+- **Amends:** ADR-018's dependency set (adds `fastembed`). **Amends** the CLAUDE.md stack line,
+  which has been updated to match.
+
+### ADR-021 · `index_version` is an integer slot, with the real fingerprint in `metadata`
+- **Context:** three places disagreed. ARCHITECTURE §3 described `index_version =
+  hash(strategy + params + corpus)`; the §12 schema (already migrated in Phase 0) declares it
+  `Integer`; `config.py` had `index_version: int = 1`. A hash does not fit an integer column.
+- **Decision:** `index_version` is a small integer **slot** chosen by config or an eval profile
+  (`1` = Phase 2 naive recursive chunking, `2` = Phase 3's scheme, and so on). The derived
+  fingerprint — `{chunk_strategy, chunk_tokens, chunk_overlap, embedding_model, corpus_hash}` — is
+  stored in `documents.metadata` and `chunks.metadata`, and ingestion compares it:
+  - same slot, same fingerprint → **no-op** (this is what makes `make ingest` idempotent)
+  - same slot, **different** fingerprint → **hard error** naming what changed, telling you to bump
+    the slot or pass `--force`
+  - different slot → written alongside, both kept, which is how ablations compare chunking schemes
+- **Why:** this delivers everything §3's hash was for — idempotency, coexisting index versions,
+  reproducible eval baselines — while *adding* a safety property a bare hash lacks: silently
+  re-chunking into a slot an eval baseline is pinned to becomes impossible rather than automatic.
+  It needs no schema change, and reports and the PROGRESS scoreboard carry a readable `1` instead
+  of a hex digest.
+- **Tradeoffs:** the slot number is chosen by a human, so bumping it is a thing you can forget. The
+  fingerprint mismatch error is the mitigation and turns the forgotten bump into a loud failure at
+  ingest time rather than a corrupted baseline. Reading ARCHITECTURE §3 literally would instead
+  mean a `String(64)` column and a rewritten Phase 0 migration, for no behavioural gain.
+- **Clarifies:** ARCHITECTURE §3's `index_version` wording, which was looser than the §12 schema
+  it has to live in.
+
 ---
 
 ## Open questions (resolve in the phase noted)
