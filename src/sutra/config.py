@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +50,12 @@ MODEL_PRICES: dict[str, ModelPrice] = {
 }
 
 LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
+
+# bge-small's hard input ceiling (ADR-004). Above it the tokenizer truncates with no error and no
+# warning, so an oversized chunk is not a crash — it is an embedding of the chunk's first half.
+# Lives here rather than in the ingestion package so `Settings` can enforce it without importing
+# the embedder.
+EMBEDDING_MAX_SEQUENCE_TOKENS = 512
 
 
 class Settings(BaseSettings):
@@ -91,6 +97,15 @@ class Settings(BaseSettings):
     # fingerprint of the chunking parameters lives in `chunks.metadata`, and ingestion refuses to
     # write mismatched parameters into an occupied slot rather than silently re-chunking it.
     index_version: int = 1
+    # Chunking parameters. These three are part of the index fingerprint (ADR-021), so changing
+    # any of them and re-ingesting into an occupied slot is a hard error rather than a silent
+    # re-chunk. Phase 3 adds the "semantic" strategy and the parent-child split.
+    chunk_strategy: Literal["recursive"] = "recursive"
+    # # CONCEPT: Chunk size is bounded above by the embedder, not by taste. bge-small truncates at
+    # # 512 tokens *silently* — a 900-token chunk embeds only its first 512 and the rest is
+    # # invisible to search forever. 400 leaves headroom for Phase 3's contextual prefix.
+    chunk_tokens: int = 400
+    chunk_overlap: int = 60
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dims: int = 384
     reranker_model: str = "BAAI/bge-reranker-base"
@@ -105,6 +120,24 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     tracing_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _chunks_must_fit_the_embedder(self) -> Settings:
+        """Fail fast when the chunk budget can exceed the embedder's silent-truncation ceiling.
+
+        Overlap is added on top of `chunk_tokens`, so the real worst case is the sum. Getting this
+        wrong costs nothing visible at ingest time and shows up only as unexplained recall loss,
+        which is the worst kind of bug to go looking for.
+        """
+        worst_case = self.chunk_tokens + self.chunk_overlap
+        if worst_case > EMBEDDING_MAX_SEQUENCE_TOKENS:
+            msg = (
+                f"chunk_tokens ({self.chunk_tokens}) + chunk_overlap ({self.chunk_overlap}) "
+                f"= {worst_case} exceeds the embedder's {EMBEDDING_MAX_SEQUENCE_TOKENS}-token "
+                "limit; chunks would be silently truncated"
+            )
+            raise ValueError(msg)
+        return self
 
     @field_validator("llm_fallback_models", mode="before")
     @classmethod
