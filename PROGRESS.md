@@ -3,7 +3,7 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 1 — Corpus + golden datasets** · Status: 🟨 in progress (step 1 written, awaiting review)
+**Phase 1 — Corpus + golden datasets** · Status: 🟨 in progress (world bible, trap map and all 10 corpus files written)
 
 ## Phase status
 
@@ -95,15 +95,23 @@ comparing profiles against each other, not as ground truth.
 
 ## Next step
 
-**Phase 1 step 1 is written and waiting on review:** `docs/world_bible.md` and the trap map
-`evals/datasets/README.md`, reviewed and committed.
+Phase 1 steps 1–2 are done and committed: `docs/world_bible.md`, the trap map
+`evals/datasets/README.md`, and all **10 corpus files** in `data/corpus/`.
 
-Review those two files. On approval, Phase 1 continues with:
-1. the 10 corpus files in `data/corpus/` per SPEC §4 and world bible §7
-2. `evals/datasets/golden_qa.jsonl` (~42 rows) and `attacks.jsonl` (~40 rows) against the
-   reserved ids in the trap map
-3. the validator script — every golden quote exists verbatim in its named corpus file
-4. freeze the corpus (ADR-014)
+**The corpus is written but not yet frozen.** Freezing (ADR-014) waits on the datasets, because
+writing the questions is what shakes out any fact that cannot actually be cited. Remaining:
+
+1. `evals/datasets/golden_qa.jsonl` — ~42 rows against the reserved `gq-` ids in the trap map
+2. `evals/datasets/attacks.jsonl` — ~40 rows against the reserved `atk-` ids (30 attacks + 10 benign)
+3. the validator script — every `source_chunks[].quote` must exist verbatim in its named corpus file
+4. then freeze the corpus
+
+Figures the datasets must use (computed from the written rows, not from the world bible):
+
+- Waystone Tithe, 14 wagons, waystones 1–17: **476 tenth-marks** at the 1053 schedule,
+  **224** under the Kesh Ithar Accord. 238 is the wrong answer that means the 1–16 restriction was missed.
+- Ledger: salt blocks across 1143 = **2,750** tenth-marks; Emberwane 1143, all goods = **2,564**.
+  Brass blanks Dustfall 1143 = 540 against Hollow 1144 = 675.
 
 Before Phase 2: copy `.env.example` to `.env` and set a real `OPENAI_API_KEY`.
 
@@ -111,6 +119,12 @@ Before Phase 2: copy `.env.example` to `.env` and set a real `OPENAI_API_KEY`.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-19 — Phase 1 — corpus written (steps 1–2).**
+  World bible and trap map approved and committed, then all 10 corpus files written per SPEC §4,
+  each 100–200 lines with the full front-matter. Checked mechanically: every ledger row's total is
+  units × per-unit, all four deliberate holes are still holes, and all 8 planted injection/PII/wrong-claim
+  strings are present and confined to file 10. Corpus not yet frozen — the datasets come first.
 
 - **2026-10-19 — Phase 1 — step 1 written, awaiting review.**
   Designed "The Meridian Chronicles": 40 numbered waystones between Halvern Reach and Kesh Ithar,
