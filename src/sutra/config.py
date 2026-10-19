@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     # # invisible to search forever. 400 leaves headroom for Phase 3's contextual prefix.
     chunk_tokens: int = 400
     chunk_overlap: int = 60
+    # # CONCEPT: k is a recall/precision dial *and* a cost dial — every retrieved chunk is
+    # # context the model pays for. 5 matches the Recall@5 column in the PROGRESS scoreboard.
+    retrieval_top_k: int = 5
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_dims: int = 384
     reranker_model: str = "BAAI/bge-reranker-base"

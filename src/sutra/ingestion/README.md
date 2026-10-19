@@ -30,10 +30,12 @@ module is built to make impossible:
   of its document, no content is lost, and no chunk exceeds `chunk_tokens + chunk_overlap`.
   Section headings go in metadata, not into `text`, so `text` stays verbatim.
 - `embed.py` — `bge-small-en-v1.5` over ONNX Runtime (ADR-020) behind an `Embedder` Protocol.
-  Passages use `embed`, queries use `query_embed`: bge is trained with an instruction prefix on
-  the query side only, and embedding a query as if it were a passage costs recall for no visible
-  reason. Token counting uses the model's own tokenizer, because the 512 ceiling is defined by
-  that tokenizer and any other counter is a guess.
+  Passages use `embed`, queries use `query_embed`, keeping the asymmetric-embedding seam even
+  though the two are currently identical for this model under fastembed (measured: no query
+  prefix is applied, and adding bge's documented one by hand moved Recall@5 from 74% to 76%,
+  which is too little to justify diverging from the default). Token counting uses the model's
+  own tokenizer, because the 512 ceiling is defined by that tokenizer and any other counter is
+  a guess.
 - `fingerprint.py`, `run.py` — the index slot (ADR-021). The fingerprint is
   `{chunk_strategy, chunk_tokens, chunk_overlap, embedding_model, corpus_hash}`, stored in
   `chunks.metadata`. Same fingerprint in the slot → no-op. Different fingerprint → refused, with

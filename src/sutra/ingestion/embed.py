@@ -84,10 +84,19 @@ class FastEmbedEmbedder:
     def embed_query(self, text: str) -> list[float]:
         """Embed a search query.
 
-        # CONCEPT: Asymmetric embedding. bge models are trained with an instruction prefix on the
-        # *query* side only ("Represent this sentence for searching relevant passages:"), so a
-        # query embedded as if it were a passage lands in a slightly different place and recall
-        # drops for no visible reason. `query_embed` applies the prefix; `embed` must not.
+        # CONCEPT: Asymmetric embedding. Some retrieval models are trained with an instruction
+        # prefix on the *query* side only, so a query embedded as though it were a passage lands
+        # slightly off-manifold and costs recall with nothing to show why. Queries and passages
+        # therefore go through separate methods, and this is the seam where that difference
+        # belongs.
+        #
+        # Measured, not assumed: for `bge-small-en-v1.5` under fastembed, `query_embed` is
+        # currently identical to `embed` — `cos(query_embed(x), embed(x)) == 1.000000`, so no
+        # prefix is applied. Prepending bge's documented prefix by hand was tried against the 42
+        # golden rows and moved almost nothing: Recall@5 74% -> 76%, MRR 0.519 -> 0.522, helping
+        # 12 rows and hurting 7. Too close to justify diverging from the library's default, so
+        # Phase 2's baseline sends the query through unchanged. Revisit with the eval harness
+        # rather than on intuition.
         """
         model = self._ensure_model()
         vectors: Iterable[object] = model.query_embed([text])  # type: ignore[attr-defined]
