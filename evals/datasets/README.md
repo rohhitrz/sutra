@@ -23,6 +23,18 @@ know it before any model sees it. All **72** source chunks across the 42 golden 
 
 Both sides are **whitespace-normalised** before the substring check, because the corpus is
 hard-wrapped markdown and a correct quote still carries the line break where the source wrapped.
+
+### Quotes have to survive chunking too (Phase 2)
+
+Existing in the corpus is necessary but not sufficient. Retrieval metrics match these quotes
+against *chunks*, so a quote the chunker splits across a boundary can never be matched however
+good the retriever is — recall drops, nothing errors, and the number reads as a retrieval result.
+`make coverage` (`evals/check_coverage.py`) closes that gap by asserting every quote lands whole
+inside at least one chunk, and distinguishes the two causes, which need opposite fixes:
+`NOT IN CORPUS` is a dataset bug, `SPLIT` is a chunker bug. Run it after `make ingest`, and with
+`--from-db` to check the chunks actually stored in an index slot rather than a fresh in-memory
+chunking. All **72** quotes are intact at `chunk_tokens=400, chunk_overlap=60` (11 of them land in
+two chunks, which is overlap doing its job).
 Normalising makes the check about the words and not about the wrapping. The validator is itself
 tested in `tests/test_datasets.py`, including a negative control that feeds it a plausible invented
 quote and asserts that it fails — a checker that has never been watched failing is not evidence.
