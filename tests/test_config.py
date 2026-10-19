@@ -72,3 +72,24 @@ def test_unknown_model_has_no_price(settings: Settings):
 
 def test_get_settings_is_cached():
     assert get_settings() is get_settings()
+
+
+def test_fallback_models_accepts_the_form_env_example_documents(monkeypatch):
+    """Regression: `.env.example` ships `LLM_FALLBACK_MODELS=gpt-6-luna`, and pydantic-settings
+    JSON-decodes complex fields from the environment *before* validators run — so that value
+    raised a JSONDecodeError and the CSV validator was unreachable. Following the project's own
+    example file crashed every entry point."""
+    monkeypatch.setenv("LLM_FALLBACK_MODELS", "gpt-6-luna")
+    assert Settings().llm_fallback_models == ["gpt-6-luna"]
+
+    monkeypatch.setenv("LLM_FALLBACK_MODELS", "gpt-6-luna, gpt-6-sol ,gpt-6-astra")
+    assert Settings().llm_fallback_models == [
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6-astra",
+    ]
+
+
+def test_fallback_models_still_accepts_a_json_array(monkeypatch):
+    monkeypatch.setenv("LLM_FALLBACK_MODELS", '["gpt-6-luna", "gpt-6-sol"]')
+    assert Settings().llm_fallback_models == ["gpt-6-luna", "gpt-6-sol"]

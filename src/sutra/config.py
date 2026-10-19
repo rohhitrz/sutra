@@ -7,11 +7,12 @@ in this file so cost accounting stays reviewable in git.
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class ModelPrice(BaseModel):
@@ -51,6 +52,33 @@ MODEL_PRICES: dict[str, ModelPrice] = {
 
 LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
 
+
+class ModelCapabilities(BaseModel):
+    """What a model will accept, as opposed to what it costs.
+
+    # CONCEPT: Providers do not expose a capability endpoint, so an unsupported parameter is
+    # discovered as a 400 at request time. A checked-in capability table turns that into a
+    # reviewable fact: the *intent* ("answer deterministically") stays in the prompt file, and
+    # the table decides whether this particular model can be told so. Stripping the parameter at
+    # the call site instead would lose the intent the moment the model changed.
+    """
+
+    # Reasoning-style models reject `temperature` rather than ignoring it:
+    #   400 — "Unsupported parameter: 'temperature' is not supported with this model."
+    supports_temperature: bool = True
+
+
+# Permissive by default: an unknown model is assumed to behave conventionally, and the 400 it
+# raises is more informative than a silently dropped parameter.
+DEFAULT_CAPABILITIES = ModelCapabilities()
+
+MODEL_CAPABILITIES: dict[str, ModelCapabilities] = {
+    "gpt-6-luna": ModelCapabilities(supports_temperature=False),
+    "gpt-6-sol": ModelCapabilities(supports_temperature=False),
+    "gpt-6.1-sol": ModelCapabilities(supports_temperature=False),
+    "gpt-6-astra": ModelCapabilities(supports_temperature=False),
+}
+
 # bge-small's hard input ceiling (ADR-004). Above it the tokenizer truncates with no error and no
 # warning, so an oversized chunk is not a crash — it is an embedding of the chunk's first half.
 # Lives here rather than in the ingestion package so `Settings` can enforce it without importing
@@ -85,7 +113,15 @@ class Settings(BaseSettings):
     llm_strong: str = "gpt-6-luna"
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 3
-    llm_fallback_models: list[str] = Field(default_factory=lambda: ["gpt-6-luna"])
+    # # CONCEPT: pydantic-settings treats a `list[str]` field as "complex" and runs json.loads
+    # # on the raw environment value *before* any validator sees it. So a perfectly reasonable
+    # # `LLM_FALLBACK_MODELS=gpt-6-luna` in .env raised a JSONDecodeError, and the `_split_csv`
+    # # validator below — written precisely to accept that form — never ran at all for env or
+    # # .env sources. `NoDecode` turns the JSON step off and hands the raw string to the
+    # # validator, which is where the parsing was always meant to happen.
+    llm_fallback_models: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["gpt-6-luna"]
+    )
 
     # ---- Prompts (ADR-006) ----
     prompt_version_answer: str = "v1"
@@ -145,10 +181,22 @@ class Settings(BaseSettings):
     @field_validator("llm_fallback_models", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
-        """Accept a comma-separated string from .env as well as a real list."""
-        if isinstance(v, str):
-            return [item.strip() for item in v.split(",") if item.strip()]
-        return v
+        """Accept a comma-separated string from .env as well as a real list.
+
+        Reachable only because the field is annotated `NoDecode`; without that, pydantic-settings
+        JSON-decodes the value first and this never runs.
+        """
+        if not isinstance(v, str):
+            return v
+        text = v.strip()
+        if text.startswith("["):
+            # Still accept the JSON form, since that is what pydantic-settings would have
+            # expected and someone may have written it that way.
+            try:
+                return json.loads(text)
+            except ValueError:
+                pass
+        return [item.strip() for item in text.split(",") if item.strip()]
 
     @field_validator("database_url")
     @classmethod
@@ -159,6 +207,10 @@ class Settings(BaseSettings):
             msg = f"DATABASE_URL must use the asyncpg driver (postgresql+asyncpg://), got: {v!r}"
             raise ValueError(msg)
         return v
+
+    def capabilities_for(self, model: str) -> ModelCapabilities:
+        """What this model accepts. Unknown models get the permissive default."""
+        return MODEL_CAPABILITIES.get(model, DEFAULT_CAPABILITIES)
 
     def price_for(self, model: str) -> ModelPrice | None:
         """Price table lookup. Returns None for an unknown model so the caller can decide

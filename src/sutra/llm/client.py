@@ -77,6 +77,21 @@ class LLMClient:
 
     # ---------------------------------------------------------------- internals
 
+    def effective_temperature(self, model: str, temperature: float | None) -> float | None:
+        """Drop `temperature` for models that reject it.
+
+        The caller's intent stays where it belongs — in the prompt file's front-matter — and this
+        is the one place that knows whether the resolved model can be told about it. Without
+        this, every prompt declaring a temperature breaks on a reasoning model with a 400 that
+        names a parameter the prompt author never passed directly.
+        """
+        if temperature is None:
+            return None
+        if self._settings.capabilities_for(model).supports_temperature:
+            return temperature
+        logger.debug("model %s does not accept temperature; dropping %s", model, temperature)
+        return None
+
     def resolve_model(self, role: ModelRole | None, model: str | None) -> str:
         """An explicit model wins; otherwise the role maps through config. ADR-017 points both
         roles at the same model today, which is why this is config and not a constant."""
@@ -232,7 +247,7 @@ class LLMClient:
                 model=resolved,
                 messages=messages,
                 max_output_tokens=max_output_tokens,
-                temperature=temperature,
+                temperature=self.effective_temperature(resolved, temperature),
                 timeout=self._settings.llm_timeout_seconds,
             )
 
@@ -277,7 +292,7 @@ class LLMClient:
                 messages=messages,
                 schema=schema,
                 max_output_tokens=max_output_tokens,
-                temperature=temperature,
+                temperature=self.effective_temperature(resolved, temperature),
                 timeout=self._settings.llm_timeout_seconds,
             )
 
@@ -326,7 +341,7 @@ class LLMClient:
             model=resolved,
             messages=messages,
             max_output_tokens=max_output_tokens,
-            temperature=temperature,
+            temperature=self.effective_temperature(resolved, temperature),
             timeout=self._settings.llm_timeout_seconds,
         ):
             if delta is not None:

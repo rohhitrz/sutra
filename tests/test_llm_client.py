@@ -290,3 +290,53 @@ async def test_tracer_records_failures(settings: Settings):
     # A failed call still costs latency and still needs to show up in the trace.
     assert len(tracer.records) == 1
     assert tracer.records[0].error is not None
+
+
+# ---------------------------------------------------------------------------
+# model capabilities
+# ---------------------------------------------------------------------------
+
+
+def test_temperature_is_dropped_for_models_that_reject_it(settings):
+    """Regression from the first live call this project ever made:
+
+        400 — Unsupported parameter: 'temperature' is not supported with this model.
+
+    The prompt file legitimately asks for temperature 0, so the intent stays in the prompt and
+    the client decides whether the resolved model can be told about it.
+    """
+    client = LLMClient(settings, adapter=FakeAdapter())
+    assert client.effective_temperature("gpt-6-luna", 0.0) is None
+    assert client.effective_temperature("gpt-6-luna", None) is None
+
+
+def test_temperature_passes_through_for_models_that_accept_it(settings):
+    """An unknown model is assumed conventional: a provider 400 is more informative than a
+    parameter dropped behind your back."""
+    client = LLMClient(settings, adapter=FakeAdapter())
+    assert client.effective_temperature("some-future-model", 0.3) == 0.3
+
+
+async def test_a_structured_call_sends_no_temperature_to_an_unsupporting_model(settings):
+    """The end the bug actually appeared at: what reaches the adapter."""
+    recorder: list[float | None] = []
+
+    class Recording(FakeAdapter):
+        async def structured(
+            self, *, model, messages, schema, max_output_tokens, temperature, timeout
+        ):
+            recorder.append(temperature)
+            return await super().structured(
+                model=model,
+                messages=messages,
+                schema=schema,
+                max_output_tokens=max_output_tokens,
+                temperature=temperature,
+                timeout=timeout,
+            )
+
+    client = LLMClient(settings, adapter=Recording())
+    await client.structured(
+        [Message(role="user", content="q")], AnswerSchema, role="strong", temperature=0.0
+    )
+    assert recorder == [None]
