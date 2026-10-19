@@ -18,6 +18,8 @@ dependencies = [
     "pgvector>=0.3.6",
     # --- LLM provider (ADR-017) ---
     "openai>=1.57",
+    # --- Local embeddings: bge-small via ONNX, not PyTorch (ADR-004, ADR-020) ---
+    "fastembed>=0.9",
     # --- YAML: prompt front-matter and eval profiles (ADR-006, ADR-008) ---
     "pyyaml>=6.0",
 ]

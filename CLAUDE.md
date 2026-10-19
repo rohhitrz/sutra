@@ -23,8 +23,8 @@ Do not read the whole `docs/` folder or future phases unless asked. Do not work 
 - **Language:** Python 3.12, `uv` for deps and venv, `ruff` (lint and format), `pyright` (type checking)
 - **API:** FastAPI (async) with SSE streaming, Pydantic v2, `pydantic-settings` for config
 - **DB:** Postgres 16 + `pgvector`. One DB for vectors, full-text search, sessions, memory, cache, feedback.
-- **Embeddings:** local `BAAI/bge-small-en-v1.5` (384 dims) via `sentence-transformers`
-- **Reranker:** local cross-encoder `BAAI/bge-reranker-base`
+- **Embeddings:** local `BAAI/bge-small-en-v1.5` (384 dims) via `fastembed` / ONNX Runtime (ADR-020 — *not* `sentence-transformers`, which would pull PyTorch)
+- **Reranker:** local cross-encoder `BAAI/bge-reranker-base`, same runtime
 - **LLMs:** go through our own thin client `src/sutra/llm/`. Model names come from `.env` and are never hardcoded.
 - **Observability:** Langfuse (OpenTelemetry-compatible)
 - **Evals:** custom retrieval metrics + RAGAS / custom LLM-judges
