@@ -130,6 +130,7 @@ class LLMClient:
             input_tokens=raw.input_tokens,
             output_tokens=raw.output_tokens,
             cached_tokens=raw.cached_tokens,
+            reasoning_tokens=raw.reasoning_tokens,
             cost_usd=cost,
         )
 

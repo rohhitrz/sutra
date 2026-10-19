@@ -37,9 +37,12 @@ PROMPT_NAME = "answer"
 # stable block past that floor.
 USER_DELIMITER = "<<<USER>>>"
 
-# Enough for a paragraph answer plus citations. Phase 5 replaces this with a real token budget
-# (ARCHITECTURE §5) that trims context to fit the model window.
-MAX_ANSWER_TOKENS = 800
+# Room for reasoning as well as the answer. `max_output_tokens` budgets both together, so a cap
+# sized for the prose you want to read can be consumed entirely by reasoning, leaving a truncated
+# body that a schema-constrained call reports as invalid JSON. The judges hit exactly that during
+# the first full eval run. Phase 5 replaces this with a real token budget (ARCHITECTURE §5) that
+# trims context to fit the model window.
+MAX_ANSWER_TOKENS = 2000
 
 
 def format_context(chunks: Sequence[RetrievedChunk]) -> str:
@@ -58,11 +61,17 @@ def format_context(chunks: Sequence[RetrievedChunk]) -> str:
     return "\n\n".join(blocks)
 
 
-def split_prompt(prompt: Prompt, *, context: str, question: str) -> list[Message]:
+def split_prompt(prompt: Prompt, **variables: str) -> list[Message]:
     """Build the message list from one versioned prompt file.
 
     The file holds both halves so a prompt version is a single reviewable artefact; the
     delimiter keeps the stable half first and uninterpolated.
+
+    Variables are whatever the template declares — the answer prompt wants `context` and
+    `question`, the correctness judge wants `question`, `answer` and `reference`. Taking them as
+    keywords rather than a fixed signature is what lets every versioned prompt in the project
+    share this one function. `Template.substitute` raises on a missing key, so a rubric edit that
+    introduces a variable nobody passes fails loudly instead of rendering a half-built prompt.
     """
     if USER_DELIMITER not in prompt.body:
         msg = (
@@ -76,7 +85,7 @@ def split_prompt(prompt: Prompt, *, context: str, question: str) -> list[Message
         Message(role="system", content=system_part.strip()),
         Message(
             role="user",
-            content=Template(user_part.strip()).substitute(context=context, question=question),
+            content=Template(user_part.strip()).substitute(**variables),
         ),
     ]
 

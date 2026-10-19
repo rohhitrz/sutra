@@ -1,0 +1,21 @@
+# The Phase 2 baseline. Every later profile is read against this one.
+#
+# Deliberately the simplest configuration that works: vector-only retrieval, one answer prompt,
+# no reranking, no query rewriting, no fusion. Phase 3 adds hybrid.yaml and hybrid_rerank.yaml,
+# and the only way to say what those techniques bought is to have measured this first.
+name: naive
+description: Vector-only retrieval, answer.v1, no reranking or query transforms.
+
+# Retrieval
+top_k: 5
+index_version: 1
+
+# Generation
+prompt_version_answer: v1
+
+# Which judges to run. Dropping one makes a run cheaper and the report narrower.
+judges: [faithfulness, relevance, correctness]
+
+# Rows evaluated at once. Each row is one answer call plus one call per judge, so 4 here is
+# 16 in-flight requests. Kept modest to stay well inside rate limits rather than to go fast.
+concurrency: 4

@@ -37,6 +37,11 @@ class Usage(BaseModel):
     # Cached input tokens are billed at a much cheaper rate, so they are tracked separately
     # rather than folded into input_tokens.
     cached_tokens: int = 0
+    # Reasoning tokens are *part of* output_tokens, not additional to them, so they are not
+    # added into cost separately. Recorded because they are invisible in the response text while
+    # being most of what a reasoning model spends — and because they are what exhausts
+    # max_output_tokens and truncates a structured response.
+    reasoning_tokens: int = 0
     # None means the model is absent from the price table — an un-priced call is still a valid
     # answer, just one with unknown cost.
     cost_usd: float | None = None

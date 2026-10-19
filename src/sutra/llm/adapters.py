@@ -30,6 +30,10 @@ class RawResult(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    # Reasoning tokens are *included* in output_tokens, not additional to them. Tracked
+    # separately because they are invisible in the response text while being most of what a
+    # reasoning model charges for, and because they are what exhausts max_output_tokens.
+    reasoning_tokens: int = 0
     response_id: str | None = None
     parsed: BaseModel | None = None
 
@@ -80,6 +84,10 @@ def _split_instructions(messages: Sequence[Message]) -> tuple[str | None, list[d
     return instructions, rest
 
 
+class TruncatedResponseError(RuntimeError):
+    """The provider stopped before finishing because the output budget ran out."""
+
+
 class OpenAIAdapter:
     """OpenAI adapter, built on the Responses API (ADR-017).
 
@@ -93,19 +101,45 @@ class OpenAIAdapter:
         self._client = AsyncOpenAI(api_key=api_key, timeout=timeout, max_retries=0)
 
     @staticmethod
-    def _usage_from(response: object) -> tuple[int, int, int]:
-        """Pull (input, output, cached) token counts out of a response, tolerating their
-        absence — usage is occasionally missing on error paths."""
+    def _usage_from(response: object) -> tuple[int, int, int, int]:
+        """Pull (input, output, cached, reasoning) token counts out of a response, tolerating
+        their absence — usage is occasionally missing on error paths."""
         usage = getattr(response, "usage", None)
         if usage is None:
-            return 0, 0, 0
-        details = getattr(usage, "input_tokens_details", None)
-        cached = getattr(details, "cached_tokens", 0) or 0
+            return 0, 0, 0, 0
+        in_details = getattr(usage, "input_tokens_details", None)
+        out_details = getattr(usage, "output_tokens_details", None)
         return (
             getattr(usage, "input_tokens", 0) or 0,
             getattr(usage, "output_tokens", 0) or 0,
-            cached,
+            getattr(in_details, "cached_tokens", 0) or 0,
+            getattr(out_details, "reasoning_tokens", 0) or 0,
         )
+
+    @staticmethod
+    def _reject_if_truncated(response: object, max_output_tokens: int) -> None:
+        """Fail with the real cause when the model ran out of room.
+
+        # CONCEPT: `max_output_tokens` budgets reasoning *and* visible output together, so a cap
+        # sized for the answer you want to read can be entirely consumed by reasoning. The
+        # response then comes back `incomplete` with a half-written body, and a schema-parsing
+        # call reports it as "Invalid JSON: EOF while parsing a string" — which sends you
+        # debugging the provider, or the schema, instead of raising the budget. Naming the cause
+        # here is the difference between a five-minute fix and an afternoon.
+        """
+        if getattr(response, "status", None) != "incomplete":
+            return
+        details = getattr(response, "incomplete_details", None)
+        reason = getattr(details, "reason", None) or "unknown"
+        usage = getattr(response, "usage", None)
+        out_details = getattr(usage, "output_tokens_details", None)
+        reasoning = getattr(out_details, "reasoning_tokens", 0) or 0
+        msg = (
+            f"the model stopped early (reason={reason}) with max_output_tokens="
+            f"{max_output_tokens}, of which {reasoning} went on reasoning. The body is "
+            "truncated; raise max_output_tokens rather than treating this as a bad response."
+        )
+        raise TruncatedResponseError(msg)
 
     async def complete(
         self,
@@ -129,13 +163,15 @@ class OpenAIAdapter:
             kwargs["temperature"] = temperature
 
         response = await self._client.responses.create(**kwargs)  # type: ignore[arg-type]
-        inp, out, cached = self._usage_from(response)
+        self._reject_if_truncated(response, max_output_tokens)
+        inp, out, cached, reasoning = self._usage_from(response)
         return RawResult(
             text=response.output_text or "",
             model=getattr(response, "model", model),
             input_tokens=inp,
             output_tokens=out,
             cached_tokens=cached,
+            reasoning_tokens=reasoning,
             response_id=getattr(response, "id", None),
         )
 
@@ -176,13 +212,14 @@ class OpenAIAdapter:
                     yield delta, None
             elif etype == "response.completed":
                 response = getattr(event, "response", None)
-                inp, out, cached = self._usage_from(response)
+                inp, out, cached, reasoning = self._usage_from(response)
                 final = RawResult(
                     text="".join(chunks),
                     model=getattr(response, "model", model) if response else model,
                     input_tokens=inp,
                     output_tokens=out,
                     cached_tokens=cached,
+                    reasoning_tokens=reasoning,
                     response_id=getattr(response, "id", None) if response else None,
                 )
 
@@ -218,13 +255,15 @@ class OpenAIAdapter:
             kwargs["temperature"] = temperature
 
         response = await self._client.responses.parse(**kwargs)  # type: ignore[arg-type]
-        inp, out, cached = self._usage_from(response)
+        self._reject_if_truncated(response, max_output_tokens)
+        inp, out, cached, reasoning = self._usage_from(response)
         return RawResult(
             text=response.output_text or "",
             model=getattr(response, "model", model),
             input_tokens=inp,
             output_tokens=out,
             cached_tokens=cached,
+            reasoning_tokens=reasoning,
             response_id=getattr(response, "id", None),
             parsed=getattr(response, "output_parsed", None),
         )

@@ -41,6 +41,11 @@ sentence_transformers/
 
 # ---- Eval outputs (reports may embed keys or raw LLM output) ----
 evals/reports/*
+# ...except the baseline. It is the reference every later run is read against and what Phase 9's
+# CI compares to, so a clone without it cannot tell whether a change helped. It holds questions,
+# answers and metrics — no keys.
+!evals/reports/baseline.json
+!evals/reports/baseline.md
 !evals/reports/.gitkeep
 
 # ---- Local data / DB dumps ----

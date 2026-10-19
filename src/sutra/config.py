@@ -125,6 +125,12 @@ class Settings(BaseSettings):
 
     # ---- Prompts (ADR-006) ----
     prompt_version_answer: str = "v1"
+    # The judges are versioned prompts like any other, and the version used is recorded in every
+    # eval report — a judge rubric edit changes the scores, so a report that did not name its
+    # judge version would not be comparable to the next one.
+    prompt_version_judge_faithfulness: str = "v1"
+    prompt_version_judge_relevance: str = "v1"
+    prompt_version_judge_correctness: str = "v1"
 
     # ---- Retrieval / ingestion ----
     # # CONCEPT: Index versioning — re-ingesting under a new version lets old chunks keep serving

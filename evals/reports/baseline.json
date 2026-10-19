@@ -1,0 +1,3365 @@
+{
+  "profile": {
+    "name": "naive",
+    "description": "Vector-only retrieval, answer.v1, no reranking or query transforms.",
+    "top_k": 5,
+    "index_version": 1,
+    "prompt_version_answer": "v1",
+    "judges": [
+      "faithfulness",
+      "relevance",
+      "correctness"
+    ],
+    "concurrency": 4
+  },
+  "started_at": "2026-10-19T21:11:22.573611Z",
+  "duration_seconds": 73.26601,
+  "index_fingerprint": "5b93e6401fd6b687",
+  "chunk_tokens": 400,
+  "chunk_overlap": 60,
+  "chunker_version": 1,
+  "embedding_model": "BAAI/bge-small-en-v1.5",
+  "answer_model": "gpt-6-luna",
+  "judge_model": "gpt-6-luna",
+  "prompt_versions": {
+    "answer": "v1",
+    "judge_faithfulness": "v1",
+    "judge_relevance": "v1",
+    "judge_correctness": "v1"
+  },
+  "rows": [
+    {
+      "id": "gq-001",
+      "question": "How many waystones make up the Meridian Line?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "06_places_wiki#0",
+        "07_factions#1",
+        "06_places_wiki#1",
+        "05_timeline#0",
+        "07_factions#0"
+      ],
+      "answer": "The Meridian Line is made up of forty waystones.",
+      "reference": "Forty. Waystone one stands at Halvern Reach and waystone forty at Kesh Ithar.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The answer states that the Line has forty waystones, which passage [1] explicitly says.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 1645,
+            "output_tokens": 38,
+            "cost_usd": 3.5720000000000004e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states the number of waystones making up the Meridian Line, which is exactly what the question asks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 356,
+            "output_tokens": 55,
+            "cost_usd": 6.31e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer correctly states that the Meridian Line is made up of forty waystones.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 405,
+            "output_tokens": 35,
+            "cost_usd": 5.8e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2227.120333001949,
+      "cost_usd": 0.0002077,
+      "answer_input_tokens": 1861,
+      "answer_output_tokens": 64
+    },
+    {
+      "id": "gq-002",
+      "question": "What is the population of Kesh Ithar?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "04_character_registry#2",
+        "07_factions#2",
+        "03_book2#2",
+        "03_book2#0",
+        "02_book1_part2#4"
+      ],
+      "answer": "Kesh Ithar has a population of 68,000 people (as recorded in Frostmark 1143).",
+      "reference": "68,000.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Both the population of 68,000 and its context in Frostmark 1143 are stated in passage [5].",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2287,
+            "output_tokens": 79,
+            "cost_usd": 0.0002682,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer gives Kesh Ithar\u2019s population, directly addressing the question asking for its population.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 368,
+            "output_tokens": 76,
+            "cost_usd": 7.48e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer gives the reference population of 68,000.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 402,
+            "output_tokens": 31,
+            "cost_usd": 5.57e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "68,000",
+          "1143"
+        ],
+        "unsupported": [
+          "68,000"
+        ]
+      },
+      "latency_ms": 2417.033458012156,
+      "cost_usd": 0.00044837999999999996,
+      "answer_input_tokens": 2491,
+      "answer_output_tokens": 49
+    },
+    {
+      "id": "gq-003",
+      "question": "Which waystone is Ossuary Gate?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "06_places_wiki#4",
+        "02_book1_part2#1",
+        "06_places_wiki#0",
+        "06_places_wiki#1",
+        "08_faq#0"
+      ],
+      "answer": "Ossuary Gate is at waystone 17.",
+      "reference": "The seventeenth.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The claim that Ossuary Gate is at waystone 17 is stated directly in passages [1] and [2].",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2147,
+            "output_tokens": 71,
+            "cost_usd": 5.724e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies Ossuary Gate as waystone 17, directly answering which waystone it is.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 353,
+            "output_tokens": 74,
+            "cost_usd": 7.23e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "Both identify Ossuary Gate as the seventeenth waystone.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 387,
+            "output_tokens": 32,
+            "cost_usd": 5.47e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "17"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2204.1261249687523,
+      "cost_usd": 0.00024365,
+      "answer_input_tokens": 2364,
+      "answer_output_tokens": 71
+    },
+    {
+      "id": "gq-004",
+      "question": "What is the population of Halvern Reach?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 2,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "06_places_wiki#1",
+        "01_book1_part1#0",
+        "01_book1_part1#3",
+        "07_factions#1",
+        "05_timeline#1"
+      ],
+      "answer": "Halvern Reach has a population of 41,000 (recorded in the entry compiled in Frostmark 1143 and amended through Frostmark 1144).",
+      "reference": "41,000.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The population of 41,000 and the entry\u2019s compilation in Frostmark 1143 and amendment through Frostmark 1144 are stated in passage [1].",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2659,
+            "output_tokens": 136,
+            "cost_usd": 9.486e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly gives the population of Halvern Reach, which is exactly what the question asks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 377,
+            "output_tokens": 53,
+            "cost_usd": 6.42e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer gives the same population as the reference: 41,000.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 411,
+            "output_tokens": 94,
+            "cost_usd": 8.81e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "41,000",
+          "1143",
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2222.243832948152,
+      "cost_usd": 0.00033496000000000003,
+      "answer_input_tokens": 2853,
+      "answer_output_tokens": 118
+    },
+    {
+      "id": "gq-005",
+      "question": "How many wagons did the Long Patience leave Halvern Reach with in Hollow 1143?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "01_book1_part1#1",
+        "05_timeline#3",
+        "01_book1_part1#3",
+        "05_timeline#4",
+        "01_book1_part1#0"
+      ],
+      "answer": "The Long Patience left Halvern Reach with fourteen wagons in Hollow 1143.",
+      "reference": "Fourteen.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The answer\u2019s claim that the Long Patience left Halvern Reach with fourteen wagons in Hollow 1143 is stated in passages [1] and [2].",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2602,
+            "output_tokens": 78,
+            "cost_usd": 6.529e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states how many wagons the Long Patience left Halvern Reach with in Hollow 1143, which is exactly what the question asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 373,
+            "output_tokens": 68,
+            "cost_usd": 7.13e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer states fourteen wagons, agreeing with the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 405,
+            "output_tokens": 31,
+            "cost_usd": 5.6000000000000006e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1143"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 1547.6182499551214,
+      "cost_usd": 0.00024347000000000003,
+      "answer_input_tokens": 2811,
+      "answer_output_tokens": 45
+    },
+    {
+      "id": "gq-006",
+      "question": "How does the tender at Ossuary Gate keep his records?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "06_places_wiki#4",
+        "03_book2#5",
+        "10_traveler_notes#2",
+        "08_faq#1",
+        "02_book1_part2#1"
+      ],
+      "answer": "Hesh keeps the records in knotted cord: a yard of cord for each season, with knots counting wagons and the spacing between knots counting days. A double knot marks a caravan that arrived short of what it set out with.",
+      "reference": "In knotted cord: one yard of cord to the season, knots counting wagons and spacing counting days.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to passage [5], which says Hesh uses knotted cord, with a yard per season, knots counting wagons, spacing counting days, and a double knot marking a caravan that arrived short of what it set out with.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2511,
+            "output_tokens": 146,
+            "cost_usd": 0.0003241,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer explains how the tender at Ossuary Gate keeps his records, as asked, by describing the knotted-cord system.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 394,
+            "output_tokens": 82,
+            "cost_usd": 8.04e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It agrees that the records are kept in knotted cord, with one yard per season, knots counting wagons, and spacing counting days; the additional double-knot detail does not conflict with the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 445,
+            "output_tokens": 163,
+            "cost_usd": 0.000126,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2294.739957957063,
+      "cost_usd": 0.00061718,
+      "answer_input_tokens": 2691,
+      "answer_output_tokens": 119
+    },
+    {
+      "id": "gq-007",
+      "question": "How many dials does the Tide Clock have?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "01_book1_part1#0",
+        "06_places_wiki#1",
+        "05_timeline#1",
+        "04_character_registry#3",
+        "06_places_wiki#0"
+      ],
+      "answer": "The Tide Clock has four dials.",
+      "reference": "Four.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passage explicitly states that the Tide Clock has four dials.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2279,
+            "output_tokens": 47,
+            "cost_usd": 4.656e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states how many dials the Tide Clock has, which is exactly what the question asks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 353,
+            "output_tokens": 55,
+            "cost_usd": 6.280000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer says the Tide Clock has four dials, matching the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 384,
+            "output_tokens": 34,
+            "cost_usd": 5.5400000000000005e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 1579.5782919740304,
+      "cost_usd": 0.00020751,
+      "answer_input_tokens": 2498,
+      "answer_output_tokens": 35
+    },
+    {
+      "id": "gq-008",
+      "question": "Which seat of the Nine Tables does Tulvo Brann hold?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "02_book1_part2#4",
+        "07_factions#2",
+        "03_book2#5",
+        "09_merchant_ledger#1"
+      ],
+      "answer": "Tulvo Brann holds the fourth seat of the Nine Tables.",
+      "reference": "The fourth seat.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages state that Tulvo Brann holds the fourth seat of the Nine Tables.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2404,
+            "output_tokens": 66,
+            "cost_usd": 5.7310000000000005e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly identifies which seat of the Nine Tables Tulvo Brann holds, as asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 361,
+            "output_tokens": 53,
+            "cost_usd": 6.26e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer states that Tulvo Brann holds the fourth seat, matching the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 394,
+            "output_tokens": 36,
+            "cost_usd": 5.740000000000001e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 1951.0711670154706,
+      "cost_usd": 0.00023576,
+      "answer_input_tokens": 2618,
+      "answer_output_tokens": 64
+    },
+    {
+      "id": "gq-009",
+      "question": "Between which waystones do the Ashen Flats lie?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "06_places_wiki#0",
+        "06_places_wiki#3",
+        "07_factions#3",
+        "08_faq#0",
+        "06_places_wiki#5"
+      ],
+      "answer": "The Ashen Flats lie between waystones 12 and 24.",
+      "reference": "Between the twelfth and the twenty-fourth.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        2,
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The answer traces directly to passage [2], which places the Ashen Flats between waystones 12 and 24.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2197,
+            "output_tokens": 71,
+            "cost_usd": 5.774e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer states that the Ashen Flats lie between waystones 12 and 24, directly answering which waystones the question asks about.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 360,
+            "output_tokens": 47,
+            "cost_usd": 5.9499999999999996e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer correctly identifies the Ashen Flats as lying between the twelfth and twenty-fourth waystones.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 399,
+            "output_tokens": 40,
+            "cost_usd": 5.9900000000000006e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "12",
+          "24"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2120.316916028969,
+      "cost_usd": 0.00024151,
+      "answer_input_tokens": 2410,
+      "answer_output_tokens": 80
+    },
+    {
+      "id": "gq-010",
+      "question": "What does Sera Volant carry at her belt?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "05_timeline#2",
+        "03_book2#4",
+        "05_timeline#4",
+        "04_character_registry#1",
+        "03_book2#3"
+      ],
+      "answer": "Sera Volant carries an astrolabe at her belt.",
+      "reference": "Her mother's brass astrolabe, its limb worn and its alidade cracked.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The answer that Sera carries an astrolabe at her belt traces directly to the passage stating she rode out with it on her belt.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2173,
+            "output_tokens": 86,
+            "cost_usd": 6.500000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states what Sera Volant carries at her belt, which is exactly what the question asks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 359,
+            "output_tokens": 57,
+            "cost_usd": 6.44e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "The answer correctly identifies an astrolabe, but omits that it is her mother's brass astrolabe with a worn limb and cracked alidade.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 404,
+            "output_tokens": 84,
+            "cost_usd": 8.24e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 1801.749792008195,
+      "cost_usd": 0.00028194,
+      "answer_input_tokens": 2387,
+      "answer_output_tokens": 92
+    },
+    {
+      "id": "gq-011",
+      "question": "Which body has the right to declare a closed route open again?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "07_factions#2",
+        "07_factions#3",
+        "06_places_wiki#4",
+        "10_traveler_notes#2",
+        "06_places_wiki#3"
+      ],
+      "answer": "The Lamplighters\u2019 Guild has the sole right to declare a closed route open again, by relighting its fires.",
+      "reference": "The Lamplighters' Guild, which does it by relighting the route's fires.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to passage [2], which says the Lamplighters\u2019 Guild holds the sole right to declare a closed route open and does so by relighting the route\u2019s fires.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2384,
+            "output_tokens": 83,
+            "cost_usd": 6.560999999999999e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies the body with the right to reopen a closed route, directly addressing the question.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 372,
+            "output_tokens": 58,
+            "cost_usd": 6.620000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer identifies the Lamplighters\u2019 Guild and says it reopens the route by relighting its fires, matching the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 419,
+            "output_tokens": 58,
+            "cost_usd": 7.090000000000002e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 1796.148124965839,
+      "cost_usd": 0.00026585,
+      "answer_input_tokens": 2587,
+      "answer_output_tokens": 74
+    },
+    {
+      "id": "gq-012",
+      "question": "How many seats does the council that governs Kesh Ithar have, and how long are they held?",
+      "category": "single-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "04_character_registry#2",
+        "07_factions#2",
+        "03_book2#0",
+        "03_book2#2",
+        "02_book1_part2#4"
+      ],
+      "answer": "The Nine Tables, which govern Kesh Ithar, have nine merchant seats, held for life.",
+      "reference": "Nine seats, held for life, one vote each.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        2,
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: the Nine Tables govern Kesh Ithar and have nine merchant seats held for life.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2295,
+            "output_tokens": 75,
+            "cost_usd": 0.000267,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer states both how many seats the council has and how long they are held, as the question asks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 376,
+            "output_tokens": 72,
+            "cost_usd": 7.36e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It agrees that the governing council has nine seats held for life; the added detail about merchant seats does not contradict the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 416,
+            "output_tokens": 44,
+            "cost_usd": 6.36e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 1681.394791987259,
+      "cost_usd": 0.00045298999999999996,
+      "answer_input_tokens": 2502,
+      "answer_output_tokens": 47
+    },
+    {
+      "id": "gq-013",
+      "question": "If a caravan wanted to take the Thennic Spur, whose approval would it need, and why is approval needed at all?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "07_factions#3",
+        "08_faq#1",
+        "06_places_wiki#4",
+        "02_book1_part2#0",
+        "08_faq#0"
+      ],
+      "answer": "The Lamplighters\u2019 Guild controls whether the Spur is open: it has the sole right to reopen a closed route by relighting its fires, and licensed caravans may not use a route while it is shut. The Spur has been open since Greening 1144, so the passages do not say a caravan needs additional approval to take it now; Guild action would be needed only if it were closed and had to be reopened.",
+      "reference": "The Lamplighters' Guild's. The Spur was closed by the 1139 rockfall when the Guild let the fires at the fourteenth and twenty-second waystones go out, and the Guild alone may declare a closed route open by relighting them.",
+      "refused": false,
+      "confidence": 0.98,
+      "citations": [
+        1,
+        3,
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: the Guild alone reopens closed routes by relighting fires, licensed caravans cannot use shut routes, and the Spur has been open since Greening 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2518,
+            "output_tokens": 231,
+            "cost_usd": 0.0003673,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies the Lamplighters\u2019 Guild and explains that its approval is relevant because a closed route must be reopened before caravans may use it, addressing both parts of the question.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 448,
+            "output_tokens": 188,
+            "cost_usd": 0.0001388,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.0,
+            "reason": "Although it correctly identifies the Guild\u2019s authority to reopen routes, it contradicts the reference by saying the Spur has been open since 1144 and that no approval is needed now; the reference says it was closed by the 1139 rockfall and only the Guild can reopen it.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 529,
+            "output_tokens": 191,
+            "cost_usd": 0.0001484,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 3991.3462080294266,
+      "cost_usd": 0.00084435,
+      "answer_input_tokens": 2658,
+      "answer_output_tokens": 326
+    },
+    {
+      "id": "gq-014",
+      "question": "Name the outrider of the Long Patience who was born at the Line's only wagon crossing of a river, and name the river.",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "01_book1_part1#1",
+        "01_book1_part1#3",
+        "03_book2#0",
+        "01_book1_part1#2",
+        "08_faq#1"
+      ],
+      "answer": "The outrider was Sera Volant, born at Varro\u2019s Ford; the river is the Vessel River.",
+      "reference": "Sera Volant, born at Varro's Ford; the river is the Vessel.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: Sera Volant is identified as the outrider and as born at Varro\u2019s Ford, and the only wagon crossing is on the Vessel River.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2489,
+            "output_tokens": 111,
+            "cost_usd": 8.066e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The question asks for the outrider\u2019s name and the river at the Line\u2019s only wagon crossing, and the answer provides both.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 386,
+            "output_tokens": 73,
+            "cost_usd": 7.510000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It correctly names Sera Volant and Varro\u2019s Ford, and \u201cVessel River\u201d identifies the river the reference calls the Vessel.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 433,
+            "output_tokens": 190,
+            "cost_usd": 0.0001383,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 1722.0072080381215,
+      "cost_usd": 0.00036876,
+      "answer_input_tokens": 2693,
+      "answer_output_tokens": 95
+    },
+    {
+      "id": "gq-015",
+      "question": "Which society did the Keeper of the Tide Clock who held office during the Long Patience's 1143 passage belong to?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 3,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "01_book1_part1#0",
+        "04_character_registry#3",
+        "06_places_wiki#1",
+        "03_book2#5",
+        "02_book1_part2#4"
+      ],
+      "answer": "The passages do not identify which society Ilsa Mirren belonged to. They establish that she was Keeper during Hollow 1143 and that Quiet Ledger membership is not recorded in the registry, but they do not connect her to that society. (The registry notes that Quiet Ledger membership must be sought in the narrative record.)",
+      "reference": "The Quiet Ledger. The Keeper in 1143 was Ilsa Mirren, who declared in Dustfall 1144 that she had been a member for nineteen years.",
+      "refused": true,
+      "confidence": 0.98,
+      "citations": [
+        1,
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages establish Ilsa Mirren was Keeper during Hollow 1143 and that Quiet Ledger membership is omitted from the registry, but they do not identify her as belonging to any society; the answer accurately notes that limitation.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2569,
+            "output_tokens": 806,
+            "cost_usd": 0.0006598999999999999,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly addresses which society Ilsa Mirren belonged to by saying the passages do not identify one, and gives the related known facts about her office and the registry.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 423,
+            "output_tokens": 135,
+            "cost_usd": 0.00010980000000000001,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.0,
+            "reason": "The reference identifies Ilsa Mirren as a member of the Quiet Ledger, while the answer says the passages do not identify her society.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 486,
+            "output_tokens": 113,
+            "cost_usd": 0.00010510000000000001,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1143"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 4093.168917053845,
+      "cost_usd": 0.0010699,
+      "answer_input_tokens": 2733,
+      "answer_output_tokens": 335
+    },
+    {
+      "id": "gq-016",
+      "question": "On what date did the Long Patience reach the waystone whose records are kept in knotted cord?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 3,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "01_book1_part1#0",
+        "02_book1_part2#0",
+        "02_book1_part2#1",
+        "06_places_wiki#0",
+        "06_places_wiki#2"
+      ],
+      "answer": "The *Long Patience* reached the seventeenth waystone, Ossuary Gate, in Dustfall of 1143. The passage gives no exact day.",
+      "reference": "Dustfall 1143. The knotted-cord records are Hesh's at Ossuary Gate, the seventeenth waystone.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to passage [3]: the Long Patience came to the seventeenth stone, Ossuary Gate, in Dustfall 1143, and the passage gives no exact day.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2157,
+            "output_tokens": 130,
+            "cost_usd": 0.0002807,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer gives the date associated with reaching the waystone, which is what the question asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 389,
+            "output_tokens": 160,
+            "cost_usd": 0.00011890000000000002,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It identifies the arrival as Dustfall 1143 at the seventeenth waystone, Ossuary Gate, matching the reference; the reference gives no exact day.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 446,
+            "output_tokens": 52,
+            "cost_usd": 7.06e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1143"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2328.1744589912705,
+      "cost_usd": 0.0005719799999999999,
+      "answer_input_tokens": 2351,
+      "answer_output_tokens": 156
+    },
+    {
+      "id": "gq-017",
+      "question": "How is the leader of the Ashen Compact related to Sera Volant?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 4,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "04_character_registry#1",
+        "05_timeline#2",
+        "04_character_registry#0",
+        "07_factions#3",
+        "05_timeline#4"
+      ],
+      "answer": "The Ashen Compact\u2019s leader, Marrowen Vehl, is Sera Volant\u2019s uncle: he was Ravenna Volant\u2019s brother.",
+      "reference": "He is her uncle. Marrowen Vehl told her at Old Mirrow in Dustfall 1144 that Ravenna Volant, her mother, was his sister.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        4,
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: Marrowen Vehl leads the Ashen Compact, and the timeline states he was Ravenna Volant\u2019s brother, making him Sera\u2019s uncle.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2425,
+            "output_tokens": 98,
+            "cost_usd": 7.352e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states how the Ashen Compact\u2019s leader is related to Sera Volant, as asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 381,
+            "output_tokens": 64,
+            "cost_usd": 7.01e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "Both answers state that Marrowen Vehl is Sera Volant\u2019s uncle and Ravenna Volant\u2019s brother.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 445,
+            "output_tokens": 43,
+            "cost_usd": 6.6e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2558.4361249930225,
+      "cost_usd": 0.00030711,
+      "answer_input_tokens": 2622,
+      "answer_output_tokens": 142
+    },
+    {
+      "id": "gq-018",
+      "question": "How did the mother of the Long Patience's outrider die, and what society did she belong to?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "01_book1_part1#1",
+        "03_book2#0",
+        "03_book2#4",
+        "02_book1_part2#4",
+        "01_book1_part1#3"
+      ],
+      "answer": "Ravenna Volant drowned in the Vessel River in Emberwane of 1131 while surveying its crossing on the Line. The passages say she was a correspondent of the Quiet Ledger, but do not establish that she was a member of the society.",
+      "reference": "Ravenna Volant drowned in the flood of the Vessel River at Varro's Ford in Emberwane 1131. She was a member of the Quiet Ledger.",
+      "refused": true,
+      "confidence": 0.97,
+      "citations": [
+        5,
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 0.0,
+            "reason": "The passages say Ilsa Mirren was Ravenna Volant\u2019s correspondent, not that Ravenna was a correspondent of the Quiet Ledger; they do not establish Ravenna\u2019s membership or affiliation with that society.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2445,
+            "output_tokens": 274,
+            "cost_usd": 0.0003815,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "It gives how Ravenna died and identifies the Quiet Ledger, addressing both the death and society asked about.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 406,
+            "output_tokens": 140,
+            "cost_usd": 0.0001106,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly says Ravenna drowned in the Vessel River in Emberwane 1131, but omits the flood at Varro\u2019s Ford and disputes the reference\u2019s statement that she belonged to the Quiet Ledger.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 468,
+            "output_tokens": 310,
+            "cost_usd": 0.0002018,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1131"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 3304.835082963109,
+      "cost_usd": 0.0008389000000000001,
+      "answer_input_tokens": 2623,
+      "answer_output_tokens": 237
+    },
+    {
+      "id": "gq-019",
+      "question": "Why did Sera Volant decline to take the Thennic Spur after it reopened?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "03_book2#1",
+        "05_timeline#2",
+        "05_timeline#4",
+        "04_character_registry#1",
+        "03_book2#2"
+      ],
+      "answer": "Sera said the Spur would save eight stones of salt, but would cost Hesh\u2019s cord and the Gate\u2019s cistern\u2014things she considered vital for surviving a bad passage. (The Spur had reopened in Greening 1144.)",
+      "reference": "Because although the Spur saves about twelve days and eight waystones of the Flats, it costs a caravan the cistern and the cord at Ossuary Gate, which on a bad passage are what keep you alive.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passage: Sera says the Spur would save eight stones of salt but cost Hesh\u2019s cord and the Gate\u2019s cistern, which keep you alive on a bad passage, and it reopened in Greening 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2254,
+            "output_tokens": 133,
+            "cost_usd": 0.0002919,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer explains that Sera declined because the salt savings would come at the cost of Hesh\u2019s cord and the Gate\u2019s cistern, addressing why she refused the reopened Spur.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 401,
+            "output_tokens": 89,
+            "cost_usd": 8.46e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.0,
+            "reason": "It gives a different saving\u2014eight stones of salt instead of about twelve days and eight waystones of the Flats\u2014although it correctly identifies the cistern and cord as vital for survival.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 472,
+            "output_tokens": 254,
+            "cost_usd": 0.0001742,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2527.645750029478,
+      "cost_usd": 0.0006493,
+      "answer_input_tokens": 2433,
+      "answer_output_tokens": 148
+    },
+    {
+      "id": "gq-020",
+      "question": "Where is the Waystone Tithe counted, and who governs the place it is counted in?",
+      "category": "multi-hop",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 2,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "07_factions#2",
+        "07_factions#1",
+        "06_places_wiki#1",
+        "08_faq#0",
+        "06_places_wiki#0"
+      ],
+      "answer": "The Waystone Tithe is counted beneath the first waystone, in the Syndic\u2019s courtyard at Halvern Reach. Halvern Reach is governed by the Harbour Syndicate, under Harbour Syndic Halbrecht Oye (in 1144).",
+      "reference": "Beneath the first waystone, in the Syndic's courtyard at Halvern Reach, which is governed by the Harbour Syndicate under the Harbour Syndic.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        3,
+        4
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: the tithe is counted beneath the first waystone in the Syndic\u2019s courtyard at Halvern Reach, which is governed by the Harbour Syndicate under Halbrecht Oye in 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2193,
+            "output_tokens": 137,
+            "cost_usd": 9.070000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies where the Waystone Tithe is counted and who governs that place, addressing both parts of the question.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 403,
+            "output_tokens": 73,
+            "cost_usd": 7.68e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer gives the stated location and governance, and its added name and date do not contradict the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 464,
+            "output_tokens": 203,
+            "cost_usd": 0.00014790000000000002,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2434.862833004445,
+      "cost_usd": 0.00040588,
+      "answer_input_tokens": 2371,
+      "answer_output_tokens": 133
+    },
+    {
+      "id": "gq-021",
+      "question": "Who is the caravan master of the Long Patience?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "03_book2#0",
+        "01_book1_part1#1",
+        "02_book1_part2#0",
+        "04_character_registry#0",
+        "09_merchant_ledger#2"
+      ],
+      "answer": "Sera Volant has been the caravan master of the *Long Patience* since Hollow 1144.",
+      "reference": "Sera Volant, since Hollow 1144, when Oren Dask retired and signed the licence over to her. Before that it was Oren Dask.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        4
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages state that Sera Volant became caravan master of the Long Patience in Hollow 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2382,
+            "output_tokens": 76,
+            "cost_usd": 6.209e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies Sera Volant as the caravan master, directly answering who the question asks about.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 368,
+            "output_tokens": 54,
+            "cost_usd": 6.38e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly names Sera Volant and gives Hollow 1144, but omits that she took over when Oren Dask retired and signed the licence to her.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 431,
+            "output_tokens": 133,
+            "cost_usd": 0.00010960000000000001,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2100.9596250369214,
+      "cost_usd": 0.00030113000000000004,
+      "answer_input_tokens": 2587,
+      "answer_output_tokens": 79
+    },
+    {
+      "id": "gq-022",
+      "question": "Who was the caravan master of the Long Patience during the Hollow 1143 passage?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 5,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "01_book1_part1#1",
+        "03_book2#0",
+        "02_book1_part2#0",
+        "04_character_registry#0",
+        "05_timeline#3"
+      ],
+      "answer": "Oren Dask was the caravan master during the Hollow 1143 passage.",
+      "reference": "Oren Dask.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages state that the Long Patience left in Hollow 1143 under master Oren Dask.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2345,
+            "output_tokens": 40,
+            "cost_usd": 4.372000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies Oren Dask as the caravan master, directly addressing who held that role during the Hollow 1143 passage.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 369,
+            "output_tokens": 61,
+            "cost_usd": 6.74e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer names Oren Dask, matching the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 403,
+            "output_tokens": 44,
+            "cost_usd": 6.23e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1143"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 1957.9723339993507,
+      "cost_usd": 0.00024075,
+      "answer_input_tokens": 2556,
+      "answer_output_tokens": 83
+    },
+    {
+      "id": "gq-023",
+      "question": "Is the Thennic Spur passable?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "06_places_wiki#4",
+        "08_faq#1",
+        "07_factions#3",
+        "10_traveler_notes#1",
+        "06_places_wiki#3"
+      ],
+      "answer": "Yes. The Thennic Spur has been open since Greening 1144, when the Guild cleared the fall and relit both fires. The passages establish its route status, not whether conditions make it passable at this exact moment.",
+      "reference": "Yes. It was closed by a rockfall in Frostmark 1139, but the Lamplighters' Guild cleared the fall and relit both fires in Greening 1144, and it has been open since.",
+      "refused": false,
+      "confidence": 0.96,
+      "citations": [
+        3,
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 0.5,
+            "reason": "The passages say the Spur has been open since Greening 1144, but do not establish that it is passable at this exact moment; the answer\u2019s opening \u201cYes\u201d overstates that evidence.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2506,
+            "output_tokens": 365,
+            "cost_usd": 0.0004331,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 0.5,
+            "reason": "The answer says the Spur is generally open, but the question asks whether it is passable now, which the answer says it cannot establish.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 392,
+            "output_tokens": 156,
+            "cost_usd": 0.0001172,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly says the Spur has been open since Greening 1144, but the caveat about current conditions hedges the reference\u2019s clear conclusion that it is passable.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 466,
+            "output_tokens": 176,
+            "cost_usd": 0.0001346,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 3800.170792033896,
+      "cost_usd": 0.00082252,
+      "answer_input_tokens": 2685,
+      "answer_output_tokens": 221
+    },
+    {
+      "id": "gq-024",
+      "question": "What is the Waystone Tithe rate?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "07_factions#2",
+        "03_book2#2",
+        "08_faq#0",
+        "09_merchant_ledger#3",
+        "09_merchant_ledger#1"
+      ],
+      "answer": "The latest recorded rate is one tenth-mark per wagon for each waystone passed, counting both the first and last, under the Kesh Ithar Accord in Longlight 1144. It applies only to waystones one through sixteen, north of Ossuary Gate; no tithe is owed on waystones seventeen through forty.",
+      "reference": "One tenth-mark per wagon for each waystone passed, counting the first and the last, and only on waystones one to sixteen. That is the Kesh Ithar Accord rate, in force since Longlight 1144; before it the rate was two tenth-marks across the whole Line.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the Accord passage, which gives the one tenth-mark rate, inclusive counting, its Longlight 1144 date, and the waystones where the tithe applies.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2195,
+            "output_tokens": 188,
+            "cost_usd": 0.0003135,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states the Waystone Tithe rate per wagon for each waystone, addressing the rate asked for.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 409,
+            "output_tokens": 82,
+            "cost_usd": 8.190000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly gives the current one-tenth-mark rate, its counting rule, scope, and accord date, but omits the reference\u2019s prior rate of two tenth-marks across the whole Line.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 498,
+            "output_tokens": 252,
+            "cost_usd": 0.0001758,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2818.86974995723,
+      "cost_usd": 0.00068954,
+      "answer_input_tokens": 2357,
+      "answer_output_tokens": 189
+    },
+    {
+      "id": "gq-025",
+      "question": "Does anyone live at Ossuary Gate?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 2,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "06_places_wiki#4",
+        "02_book1_part2#1",
+        "08_faq#1",
+        "03_book2#5",
+        "08_faq#0"
+      ],
+      "answer": "Yes. From Frostmark 1144, nine Lamplighters' Guild members lived at Ossuary Gate, along with Hesh the tender, making ten residents in total. In Book One (1143), nobody lived there.",
+      "reference": "Yes, since Frostmark 1144: a permanent Lamplighters' Guild station of nine, plus the tender Hesh, who makes ten. Nobody lived there during Book One.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        4
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: from Frostmark 1144, nine Guild members and Hesh the tender made ten residents, while no one lived there in Book One (1143).",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2432,
+            "output_tokens": 124,
+            "cost_usd": 0.00030520000000000005,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly says that people lived at Ossuary Gate and specifies who and when, addressing whether anyone lives there.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 389,
+            "output_tokens": 79,
+            "cost_usd": 7.840000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "Agrees that since Frostmark 1144, nine Lamplighters plus Hesh lived at Ossuary Gate, making ten, and that nobody lived there during Book One.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 455,
+            "output_tokens": 170,
+            "cost_usd": 0.0001305,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144",
+          "1143"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2634.929292020388,
+      "cost_usd": 0.0006010000000000001,
+      "answer_input_tokens": 2613,
+      "answer_output_tokens": 121
+    },
+    {
+      "id": "gq-026",
+      "question": "Who is the Keeper of the Tide Clock?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 4,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "04_character_registry#3",
+        "01_book1_part1#0",
+        "06_places_wiki#1",
+        "05_timeline#5",
+        "05_timeline#1"
+      ],
+      "answer": "As of Frostmark 1144, the Keeper of the Tide Clock is Pell Varrow.",
+      "reference": "Pell Varrow, appointed in Frostmark 1144 at the age of seventeen, after Ilsa Mirren stood down.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        3,
+        4
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages state that Pell Varrow is Keeper from Frostmark 1144, supporting the answer.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2481,
+            "output_tokens": 82,
+            "cost_usd": 0.00028910000000000003,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies Pell Varrow as the Keeper of the Tide Clock, directly answering who the question asked about.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 363,
+            "output_tokens": 70,
+            "cost_usd": 7.13e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly identifies Pell Varrow as Keeper in Frostmark 1144, but omits that he was seventeen and replaced Ilsa Mirren.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 417,
+            "output_tokens": 90,
+            "cost_usd": 8.67e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 6070.716458023526,
+      "cost_usd": 0.00074726,
+      "answer_input_tokens": 2689,
+      "answer_output_tokens": 546
+    },
+    {
+      "id": "gq-027",
+      "question": "Until when did the Waystone Tithe schedule of 1053 apply?",
+      "category": "temporal",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 5,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "07_factions#2",
+        "03_book2#2",
+        "07_factions#3",
+        "06_places_wiki#1",
+        "07_factions#1"
+      ],
+      "answer": "The 1053 schedule applied to every passage up to and including Longlight 1144.",
+      "reference": "To every passage up to and including Longlight 1144, when the Kesh Ithar Accord replaced it.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages state that the 1053 schedule applied to every passage up to and including Longlight 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2487,
+            "output_tokens": 75,
+            "cost_usd": 6.264e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states the date through which the 1053 Waystone Tithe schedule applied, as asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 369,
+            "output_tokens": 65,
+            "cost_usd": 6.939999999999999e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "Both state that the schedule applied through and including Longlight 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 421,
+            "output_tokens": 109,
+            "cost_usd": 9.66e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1053",
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2715.8009999548085,
+      "cost_usd": 0.00033386,
+      "answer_input_tokens": 2695,
+      "answer_output_tokens": 156
+    },
+    {
+      "id": "gq-028",
+      "question": "Under the schedule of 1053, what Waystone Tithe did the Long Patience owe for carrying fourteen wagons from waystone one to Ossuary Gate?",
+      "category": "numeric",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 3,
+        "evidence_found": 2,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "02_book1_part2#1",
+        "01_book1_part1#1",
+        "06_places_wiki#4",
+        "07_factions#2",
+        "08_faq#0"
+      ],
+      "answer": "The passages do not give the 1053 rate, so the total owed cannot be determined. They establish that the schedule covered waystones 17\u201340 and counted both endpoints; from waystone 1 to Ossuary Gate (waystone 17), the 14 wagons would therefore be charged for one covered waystone each. The total would be 14 times the 1053 per-wagon rate, which is not recorded here.",
+      "reference": "476 tenth-marks. Ossuary Gate is waystone seventeen, so the wagons pass seventeen waystones counting the first and the last: 14 x 17 x 2 = 476 tenth-marks, or 47 marks and 6 tenth-marks.",
+      "refused": true,
+      "confidence": 0.98,
+      "citations": [
+        1,
+        4
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: the 1053 rate is not given, the schedule covers waystones 17\u201340 and counts both endpoints, and the route reaches only one covered waystone for each of the 14 wagons.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2453,
+            "output_tokens": 414,
+            "cost_usd": 0.0004523,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 0.5,
+            "reason": "It identifies the route\u2019s chargeable waystone count and gives a formula, but the question asked for the total tithe owed and the answer does not provide an amount.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 457,
+            "output_tokens": 188,
+            "cost_usd": 0.00013969999999999998,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.0,
+            "reason": "The reference gives a total of 476 tenth-marks, while the answer says the rate and total cannot be determined.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 541,
+            "output_tokens": 70,
+            "cost_usd": 8.91e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1053",
+          "17",
+          "40",
+          "14"
+        ],
+        "unsupported": [
+          "40"
+        ]
+      },
+      "latency_ms": 5237.964333966374,
+      "cost_usd": 0.00089528,
+      "answer_input_tokens": 2591,
+      "answer_output_tokens": 376
+    },
+    {
+      "id": "gq-029",
+      "question": "What would that same passage of fourteen wagons from waystone one to Ossuary Gate cost under the Kesh Ithar Accord?",
+      "category": "numeric",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 1,
+        "first_relevant_rank": 5,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "03_book2#2",
+        "07_factions#2",
+        "04_character_registry#2",
+        "06_places_wiki#4",
+        "01_book1_part1#1"
+      ],
+      "answer": "Under the Accord, the 14 wagons would owe one tenth-mark for each of waystones 1\u201316: 14 \u00d7 16 = 224 tenth-marks total (22.4 marks). Waystone 17, Ossuary Gate, is not subject to the tithe.",
+      "reference": "224 tenth-marks. The Accord charges one tenth-mark per wagon per waystone but only on waystones one to sixteen, so 14 x 16 x 1 = 224 tenth-marks.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        1,
+        2,
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: the Accord charges one tenth-mark per wagon on waystones 1\u201316, excludes waystone 17, and 14 \u00d7 16 equals 224 tenth-marks (22.4 marks).",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2399,
+            "output_tokens": 233,
+            "cost_usd": 0.0003564,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer calculates the cost for the specified 14-wagon passage from waystone one to Ossuary Gate under the Accord, directly addressing the question.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 420,
+            "output_tokens": 94,
+            "cost_usd": 8.9e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It gives the reference total of 224 tenth-marks for 14 wagons across waystones 1\u201316, consistent with excluding waystone 17.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 491,
+            "output_tokens": 195,
+            "cost_usd": 0.00014659999999999999,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "14",
+          "16",
+          "224",
+          "22.4",
+          "17"
+        ],
+        "unsupported": [
+          "16",
+          "224",
+          "22.4"
+        ]
+      },
+      "latency_ms": 3875.058249977883,
+      "cost_usd": 0.00077794,
+      "answer_input_tokens": 2567,
+      "answer_output_tokens": 320
+    },
+    {
+      "id": "gq-030",
+      "question": "What was the total value of the salt blocks recorded in Tulvo Brann's ledger during 1143?",
+      "category": "numeric",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 3,
+        "evidence_found": 3,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "09_merchant_ledger#3",
+        "09_merchant_ledger#1",
+        "09_merchant_ledger#2",
+        "02_book1_part2#2"
+      ],
+      "answer": "The total value of salt blocks recorded during 1143 was 2,750 tenth-marks (946 + 1,034 + 770).",
+      "reference": "2,750 tenth-marks: 946 in Dustfall, 1,034 in Emberwane and 770 in Frostmark. The 660 recorded in Hollow 1144 falls outside 1143.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The salt-block totals for Dustfall, Emberwane, and Frostmark 1143 are 946, 1,034, and 770 tenth-marks, which sum to 2,750 tenth-marks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2257,
+            "output_tokens": 119,
+            "cost_usd": 0.0002852,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer gives the requested total value of the salt blocks recorded in Tulvo Brann\u2019s ledger during 1143.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 387,
+            "output_tokens": 79,
+            "cost_usd": 7.82e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer gives the correct 1143 total, 2,750 tenth-marks, and its three figures match the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 459,
+            "output_tokens": 45,
+            "cost_usd": 6.840000000000001e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1143",
+          "2,750",
+          "946",
+          "1,034",
+          "770"
+        ],
+        "unsupported": [
+          "2,750"
+        ]
+      },
+      "latency_ms": 3230.862000025809,
+      "cost_usd": 0.00053411,
+      "answer_input_tokens": 2454,
+      "answer_output_tokens": 155
+    },
+    {
+      "id": "gq-031",
+      "question": "What is the total value of all goods Tulvo Brann recorded in Emberwane 1143?",
+      "category": "numeric",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 5,
+        "evidence_found": 5,
+        "first_relevant_rank": 3,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "09_merchant_ledger#2",
+        "09_merchant_ledger#1",
+        "02_book1_part2#2",
+        "09_merchant_ledger#3"
+      ],
+      "answer": "The total value was 2,564 tenth-marks in Emberwane 1143.",
+      "reference": "2,564 tenth-marks (1,034 + 540 + 280 + 270 + 440).",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The total of the five Emberwane 1143 row values is 2,564 tenth-marks, as stated.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2243,
+            "output_tokens": 84,
+            "cost_usd": 6.47e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer gives the total value of the goods Tulvo Brann recorded in Emberwane 1143, which is exactly what the question asks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 373,
+            "output_tokens": 71,
+            "cost_usd": 7.280000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer gives the same total, 2,564 tenth-marks, for Emberwane 1143.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 426,
+            "output_tokens": 55,
+            "cost_usd": 7.01e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "2,564",
+          "1143"
+        ],
+        "unsupported": [
+          "2,564"
+        ]
+      },
+      "latency_ms": 2124.0475829690695,
+      "cost_usd": 0.00028689000000000004,
+      "answer_input_tokens": 2452,
+      "answer_output_tokens": 109
+    },
+    {
+      "id": "gq-032",
+      "question": "In Dustfall 1143, did Tulvo Brann's glass vials or his salt blocks come to more?",
+      "category": "numeric",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 2,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "09_merchant_ledger#1",
+        "09_merchant_ledger#3",
+        "09_merchant_ledger#2",
+        "02_book1_part2#2"
+      ],
+      "answer": "The salt blocks came to more: 946 tenth-marks, compared with 720 tenth-marks for the glass vials.",
+      "reference": "The salt blocks, at 946 tenth-marks against 720 for the glass vials.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the Dustfall 1143 ledger rows, which list salt blocks at 946 tenth-marks and glass vials at 720 tenth-marks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2255,
+            "output_tokens": 90,
+            "cost_usd": 6.782000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly compares the prices of Tulvo Brann\u2019s salt blocks and glass vials in Dustfall 1143, and identifies which came to more.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 385,
+            "output_tokens": 65,
+            "cost_usd": 7.099999999999999e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer agrees that the salt blocks cost more and gives the same figures: 946 tenth-marks versus 720 for the glass vials.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 433,
+            "output_tokens": 48,
+            "cost_usd": 6.730000000000001e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "946",
+          "720"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2639.9992919759825,
+      "cost_usd": 0.00027445000000000003,
+      "answer_input_tokens": 2456,
+      "answer_output_tokens": 87
+    },
+    {
+      "id": "gq-033",
+      "question": "Did Tulvo Brann spend more on brass blanks in Dustfall 1143 or in Hollow 1144?",
+      "category": "numeric",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 2,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 3
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "03_book2#3",
+        "09_merchant_ledger#2",
+        "09_merchant_ledger#1",
+        "04_character_registry#1"
+      ],
+      "answer": "Tulvo Brann spent more on brass blanks in Hollow 1144: 675 tenth-marks, compared with 540 tenth-marks in Dustfall 1143.",
+      "reference": "In Hollow 1144: 675 tenth-marks, against 540 in Dustfall 1143.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the ledger: brass blanks totaled 540 tenth-marks in Dustfall 1143 and 675 in Hollow 1144.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2506,
+            "output_tokens": 87,
+            "cost_usd": 6.883e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly compares Tulvo Brann\u2019s spending on brass blanks in both periods and identifies Hollow 1144 as the higher amount, as asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 393,
+            "output_tokens": 70,
+            "cost_usd": 7.43e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer correctly says Hollow 1144 was higher, giving 675 tenth-marks versus 540 in Dustfall 1143.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 444,
+            "output_tokens": 60,
+            "cost_usd": 7.44e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144",
+          "675",
+          "540",
+          "1143"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2065.5465419986285,
+      "cost_usd": 0.00031428,
+      "answer_input_tokens": 2698,
+      "answer_output_tokens": 139
+    },
+    {
+      "id": "gq-034",
+      "question": "List the events of 1144 in order.",
+      "category": "routing",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 3,
+        "evidence_found": 1,
+        "first_relevant_rank": 5,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "06_places_wiki#5",
+        "10_traveler_notes#4",
+        "05_timeline#0",
+        "05_timeline#1",
+        "05_timeline#5"
+      ],
+      "answer": "I can\u2019t place every 1144 event in a complete order because the passage gives no date for Pell Varrow\u2019s appointment as Keeper. The dated events are: **Longlight** \u2014 the Waystone Tithe schedule changed; **Dustfall** \u2014 Mirrowmere\u2019s water dropped out of season; **Frostmark** \u2014 the Lamplighters established a permanent station of nine at Ossuary Gate. Pell Varrow\u2019s appointment is also recorded for 1144, but its place in that sequence is unspecified.",
+      "reference": "Hollow 1144, Oren Dask retires and Sera Volant becomes caravan master; Greening 1144, the Lamplighters' Guild reopens the Thennic Spur; Longlight 1144, the Kesh Ithar Accord is signed and the tithe is cut; Dustfall 1144, Marrowen Vehl tells Sera Volant he is her uncle and Ilsa Mirren declares her membership of the Quiet Ledger; Frostmark 1144, Ilsa Mirren stands down and Pell Varrow becomes Keeper of the Tide Clock, and the Guild stations nine at Ossuary Gate.",
+      "refused": true,
+      "confidence": 0.91,
+      "citations": [
+        2,
+        4,
+        1,
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: they place the tithe schedule change in Longlight, the out-of-season Mirrowmere drop in Dustfall, and the permanent station in Frostmark, while recording Pell Varrow\u2019s appointment in 1144 without a month.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2317,
+            "output_tokens": 564,
+            "cost_usd": 0.0005137000000000001,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "It lists the dated 1144 events in sequence and notes that Pell Varrow\u2019s undated appointment cannot be placed, directly addressing the request to order the events.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 449,
+            "output_tokens": 148,
+            "cost_usd": 0.0001189,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.0,
+            "reason": "The reference places Pell Varrow\u2019s appointment at Frostmark and also lists Hollow and Greening events; the answer says the appointment\u2019s date is unspecified and gives a different, incomplete sequence.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 605,
+            "output_tokens": 117,
+            "cost_usd": 0.00011899999999999999,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 12437.093042011838,
+      "cost_usd": 0.0014247700000000001,
+      "answer_input_tokens": 2440,
+      "answer_output_tokens": 1297
+    },
+    {
+      "id": "gq-035",
+      "question": "Which seat does Tulvo Brann hold, and what does he trade in?",
+      "category": "routing",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 2,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "09_merchant_ledger#2",
+        "09_merchant_ledger#3",
+        "09_merchant_ledger#1",
+        "08_faq#1"
+      ],
+      "answer": "Tulvo Brann holds the fourth seat of the Nine Tables. He trades in glass vials, salt blocks, brass blanks, dried figs, lamp oil, cord, and water.",
+      "reference": "The fourth seat of the Nine Tables at Kesh Ithar. He trades in glass, salt, brass and carriage.",
+      "refused": false,
+      "confidence": 0.99,
+      "citations": [
+        1,
+        2,
+        4
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The fourth seat is stated in the ledger title, and every listed good appears among Brann\u2019s ledger entries.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2305,
+            "output_tokens": 124,
+            "cost_usd": 0.0002925,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer identifies Tulvo Brann\u2019s seat and lists what he trades in, addressing both parts of the question.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 388,
+            "output_tokens": 58,
+            "cost_usd": 6.78e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "The seat is correct, and glass, salt, and brass agree, but the answer omits carriage and adds goods not in the reference.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 441,
+            "output_tokens": 47,
+            "cost_usd": 6.76e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2719.5636659744196,
+      "cost_usd": 0.00054462,
+      "answer_input_tokens": 2495,
+      "answer_output_tokens": 183
+    },
+    {
+      "id": "gq-036",
+      "question": "What did Tulvo Brann's ledger record for salt in Dustfall 1143?",
+      "category": "routing",
+      "must_refuse": false,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 2
+      },
+      "retrieved": [
+        "09_merchant_ledger#0",
+        "09_merchant_ledger#1",
+        "09_merchant_ledger#3",
+        "09_merchant_ledger#2",
+        "02_book1_part2#2"
+      ],
+      "answer": "In Dustfall 1143, Brann\u2019s ledger recorded 86 salt blocks at 11 tenth-marks per unit, for a total of 946 tenth-marks.",
+      "reference": "86 blocks at 11 tenth-marks each, 946 tenth-marks in all, taken up at waystone 17.",
+      "refused": false,
+      "confidence": 1.0,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the Dustfall 1143 salt-block row, which records 86 units at 11 tenth-marks each, totaling 946 tenth-marks.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2258,
+            "output_tokens": 77,
+            "cost_usd": 6.135e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer gives the salt quantity, unit price, and total recorded in Tulvo Brann\u2019s ledger for Dustfall 1143, directly addressing the question.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 388,
+            "output_tokens": 67,
+            "cost_usd": 7.23e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly gives the quantity, unit price, and total, but omits that the salt was taken up at waystone 17.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 444,
+            "output_tokens": 78,
+            "cost_usd": 8.340000000000001e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1143",
+          "86",
+          "11",
+          "946"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 2274.7931660269387,
+      "cost_usd": 0.00029482,
+      "answer_input_tokens": 2450,
+      "answer_output_tokens": 106
+    },
+    {
+      "id": "gq-037",
+      "question": "What is Hesh's surname?",
+      "category": "unanswerable",
+      "must_refuse": true,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "04_character_registry#2",
+        "02_book1_part2#2",
+        "03_book2#0",
+        "02_book1_part2#1",
+        "04_character_registry#3"
+      ],
+      "answer": "The passages do not record a surname for Hesh; the registry explicitly says no family name is recorded or offered.",
+      "reference": "The corpus does not say. The registry records that no family name is held for him and declines to invent one.",
+      "refused": true,
+      "confidence": 1.0,
+      "citations": [
+        1
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to passage [1], which explicitly says no family name is recorded for Hesh and none has been offered.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2336,
+            "output_tokens": 100,
+            "cost_usd": 7.363000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly states that Hesh's surname is not recorded, addressing the question of what his surname is.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 365,
+            "output_tokens": 56,
+            "cost_usd": 6.45e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "Both state that the corpus or registry gives no surname for Hesh and does not supply one.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 417,
+            "output_tokens": 66,
+            "cost_usd": 7.47e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2149.7494999784976,
+      "cost_usd": 0.000284,
+      "answer_input_tokens": 2540,
+      "answer_output_tokens": 91
+    },
+    {
+      "id": "gq-038",
+      "question": "Who built the forty waystones of the Meridian Line?",
+      "category": "unanswerable",
+      "must_refuse": true,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 5,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "06_places_wiki#0",
+        "07_factions#1",
+        "07_factions#2",
+        "06_places_wiki#1",
+        "06_places_wiki#5"
+      ],
+      "answer": "The passages do not establish who built the forty waystones. They say who set them is not known; the stones predate the Concord of 1012, and there is no older record of the Line.",
+      "reference": "The corpus does not say, and states that nobody knows: there is no record of the Line older than the Concord of 1012 and the stones predate it.",
+      "refused": true,
+      "confidence": 1.0,
+      "citations": [
+        5
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages, which say who set the stones is not known and that the stones predate the Concord of 1012, with no older record of the Line.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2238,
+            "output_tokens": 102,
+            "cost_usd": 0.0002748,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly addresses who built the waystones by saying the builders are unknown, which is what the question asked.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 388,
+            "output_tokens": 72,
+            "cost_usd": 7.48e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer agrees that the builders are unknown and that the stones predate the Concord of 1012, with no older record of the Line.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 451,
+            "output_tokens": 48,
+            "cost_usd": 6.91e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1012"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 3404.9437909852713,
+      "cost_usd": 0.0004927,
+      "answer_input_tokens": 2423,
+      "answer_output_tokens": 99
+    },
+    {
+      "id": "gq-039",
+      "question": "How far is Mirrowmere from the Meridian Line?",
+      "category": "unanswerable",
+      "must_refuse": true,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 0,
+        "first_relevant_rank": null,
+        "relevant_chunks": 0
+      },
+      "retrieved": [
+        "06_places_wiki#0",
+        "08_faq#3",
+        "07_factions#1",
+        "03_book2#3",
+        "05_timeline#1"
+      ],
+      "answer": "The passages do not give a distance from Mirrowmere to the Meridian Line. They say the Guild does not post one because the tracks are seasonal and unsurveyed, and travellers\u2019 estimates differ widely.",
+      "reference": "The corpus does not give a distance. The places article says the tracks are unsurveyed and the figures travellers offer disagree by a factor of three.",
+      "refused": true,
+      "confidence": 1.0,
+      "citations": [
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to passage [2], which says the Guild does not post a distance because the tracks are seasonal, unsurveyed, and travellers\u2019 figures differ wildly.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2025,
+            "output_tokens": 101,
+            "cost_usd": 0.00025299999999999997,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly addresses how far Mirrowmere is from the Meridian Line by saying no distance is given, and explains why.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 387,
+            "output_tokens": 75,
+            "cost_usd": 7.620000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 0.5,
+            "reason": "It correctly says no distance is given, but omits the reference\u2019s specific detail that travellers\u2019 figures disagree by a factor of three.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 446,
+            "output_tokens": 274,
+            "cost_usd": 0.0001816,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2314.2189159989357,
+      "cost_usd": 0.00058468,
+      "answer_input_tokens": 2211,
+      "answer_output_tokens": 103
+    },
+    {
+      "id": "gq-040",
+      "question": "What was the name of Sera Volant's father?",
+      "category": "unanswerable",
+      "must_refuse": true,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "05_timeline#2",
+        "04_character_registry#0",
+        "04_character_registry#1",
+        "05_timeline#4",
+        "03_book2#0"
+      ],
+      "answer": "The passages do not record Sera Volant\u2019s father\u2019s name. They identify Ravenna Volant as her mother, but do not name her father.",
+      "reference": "The corpus does not say. Only her mother, Ravenna Volant, is recorded. Marrowen Vehl is her uncle, not her father.",
+      "refused": true,
+      "confidence": 0.99,
+      "citations": [
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "The passages identify Ravenna Volant as Sera\u2019s mother but do not record her father\u2019s name, so the answer makes no unsupported claim.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2283,
+            "output_tokens": 93,
+            "cost_usd": 0.0002748,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The question asks for Sera Volant\u2019s father\u2019s name, and the answer directly says it is not recorded while noting the nearby information that her mother was Ravenna Volant.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 378,
+            "output_tokens": 112,
+            "cost_usd": 9.38e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "The answer correctly says her father's name is not recorded and identifies Ravenna Volant as her mother.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 438,
+            "output_tokens": 39,
+            "cost_usd": 6.330000000000001e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 3017.8432909888215,
+      "cost_usd": 0.0005344600000000001,
+      "answer_input_tokens": 2479,
+      "answer_output_tokens": 155
+    },
+    {
+      "id": "gq-041",
+      "question": "What does the fourth dial of the Tide Clock measure?",
+      "category": "unanswerable",
+      "must_refuse": true,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 1,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "06_places_wiki#1",
+        "01_book1_part1#0",
+        "04_character_registry#3",
+        "05_timeline#1",
+        "03_book2#3"
+      ],
+      "answer": "The passages do not say what the fourth dial measures. They establish that it is behind a brass plate, which has never been opened in the Clock\u2019s recorded keeping, and that the Keeper winds it without being told what it counts.",
+      "reference": "The corpus does not say. The fourth dial is behind a brass plate that has never been opened, and the Keeper winds it without being told what it counts.",
+      "refused": true,
+      "confidence": 1.0,
+      "citations": [
+        1,
+        2
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: they say the fourth dial\u2019s plate has never been opened in recorded keeping and the Keeper is not told what it counts.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2544,
+            "output_tokens": 108,
+            "cost_usd": 0.0003084,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly addresses what the fourth dial measures by saying it is unknown, and gives nearby details about the dial that the question asked about.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 392,
+            "output_tokens": 112,
+            "cost_usd": 9.520000000000001e-05,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It correctly says the corpus does not identify what the fourth dial measures and matches the details that it is behind an unopened brass plate and wound by the Keeper without being told what it counts.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 453,
+            "output_tokens": 102,
+            "cost_usd": 9.630000000000001e-05,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [],
+        "unsupported": []
+      },
+      "latency_ms": 2246.806207986083,
+      "cost_usd": 0.0005639200000000001,
+      "answer_input_tokens": 2725,
+      "answer_output_tokens": 73
+    },
+    {
+      "id": "gq-042",
+      "question": "What was the population of Varro's Ford after the flood of 1144?",
+      "category": "unanswerable",
+      "must_refuse": true,
+      "retrieval": {
+        "k": 5,
+        "evidence_total": 1,
+        "evidence_found": 1,
+        "first_relevant_rank": 2,
+        "relevant_chunks": 1
+      },
+      "retrieved": [
+        "05_timeline#2",
+        "06_places_wiki#2",
+        "01_book1_part1#3",
+        "06_places_wiki#4",
+        "03_book2#3"
+      ],
+      "answer": "The passages do not record a flood at Varro\u2019s Ford in 1144 or its population after one. They give the town\u2019s population as 2,300 in 1143; the flood they record at the Ford was in 1131. [2, 3]",
+      "reference": "The corpus does not say. It gives a population of 2,300 for 1143 and records no flood at Varro's Ford in 1144; the only Vessel flood in the record is Emberwane 1131.",
+      "refused": true,
+      "confidence": 0.99,
+      "citations": [
+        2,
+        3
+      ],
+      "dropped_citations": [],
+      "short_circuited": false,
+      "judges": {
+        "results": [
+          {
+            "name": "faithfulness",
+            "score": 1.0,
+            "reason": "Every claim traces to the passages: they record the Ford\u2019s population as 2,300 in 1143 and its flood in 1131, but no 1144 flood or later population.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 2372,
+            "output_tokens": 131,
+            "cost_usd": 0.00030270000000000004,
+            "error": null
+          },
+          {
+            "name": "relevance",
+            "score": 1.0,
+            "reason": "The answer directly addresses the requested population after the 1144 flood by saying no such record is given, and provides the nearby population and recorded flood information.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 409,
+            "output_tokens": 143,
+            "cost_usd": 0.00011240000000000001,
+            "error": null
+          },
+          {
+            "name": "correctness",
+            "score": 1.0,
+            "reason": "It correctly says the corpus gives no 1144 flood or post-flood population, gives 2,300 in 1143, and places the recorded flood in 1131.",
+            "prompt_version": "v1",
+            "model": "gpt-6-luna",
+            "input_tokens": 485,
+            "output_tokens": 400,
+            "cost_usd": 0.0002485,
+            "error": null
+          }
+        ]
+      },
+      "grounding": {
+        "figures_in_answer": [
+          "1144",
+          "2,300",
+          "1143",
+          "1131"
+        ],
+        "unsupported": []
+      },
+      "latency_ms": 3432.6188329723664,
+      "cost_usd": 0.0008142900000000001,
+      "answer_input_tokens": 2542,
+      "answer_output_tokens": 250
+    }
+  ],
+  "retrieval": {
+    "rows": 42,
+    "k": 5,
+    "recall_at_k": 0.6190476190476191,
+    "hit_rate_at_k": 0.7380952380952381,
+    "mrr": 0.4920634920634921,
+    "context_precision": 0.19523809523809527
+  },
+  "judges": [
+    {
+      "name": "faithfulness",
+      "mean_score": 0.9642857142857143,
+      "scored_rows": 42,
+      "failed_rows": 0,
+      "prompt_version": "v1"
+    },
+    {
+      "name": "relevance",
+      "mean_score": 0.9761904761904762,
+      "scored_rows": 42,
+      "failed_rows": 0,
+      "prompt_version": "v1"
+    },
+    {
+      "name": "correctness",
+      "mean_score": 0.7738095238095238,
+      "scored_rows": 42,
+      "failed_rows": 0,
+      "prompt_version": "v1"
+    }
+  ],
+  "refusal": {
+    "unanswerable_rows": 6,
+    "correctly_refused": 6,
+    "answerable_rows": 36,
+    "falsely_refused": 4
+  },
+  "by_category": [
+    {
+      "category": "multi-hop",
+      "rows": 8,
+      "recall_at_k": 0.375,
+      "mrr": 0.3854166666666667,
+      "refusal_correct": 0.75,
+      "faithfulness": 0.875,
+      "correctness": 0.5625
+    },
+    {
+      "category": "numeric",
+      "rows": 6,
+      "recall_at_k": 0.8611111111111112,
+      "mrr": 0.6722222222222222,
+      "refusal_correct": 0.8333333333333334,
+      "faithfulness": 1.0,
+      "correctness": 0.8333333333333334
+    },
+    {
+      "category": "routing",
+      "rows": 3,
+      "recall_at_k": 0.4444444444444444,
+      "mrr": 0.39999999999999997,
+      "refusal_correct": 0.6666666666666666,
+      "faithfulness": 1.0,
+      "correctness": 0.3333333333333333
+    },
+    {
+      "category": "single-hop",
+      "rows": 12,
+      "recall_at_k": 0.5833333333333334,
+      "mrr": 0.4583333333333333,
+      "refusal_correct": 1.0,
+      "faithfulness": 1.0,
+      "correctness": 0.9583333333333334
+    },
+    {
+      "category": "temporal",
+      "rows": 7,
+      "recall_at_k": 0.6428571428571429,
+      "mrr": 0.5214285714285715,
+      "refusal_correct": 1.0,
+      "faithfulness": 0.9285714285714286,
+      "correctness": 0.7142857142857143
+    },
+    {
+      "category": "unanswerable",
+      "rows": 6,
+      "recall_at_k": 0.8333333333333334,
+      "mrr": 0.5333333333333333,
+      "refusal_correct": 1.0,
+      "faithfulness": 1.0,
+      "correctness": 0.9166666666666666
+    }
+  ],
+  "rows_with_unsupported_figures": 5,
+  "rows_with_unverifiable_figures": 3,
+  "figure_support_rate": 0.9511904761904763,
+  "total_cost_usd": 0.02119435,
+  "total_input_tokens": 133188,
+  "total_output_tokens": 14578,
+  "latency_p50_ms": 2372.6039585017134,
+  "latency_p95_ms": 5237.964333966374,
+  "judge_caveat": "The judge model is the same model that produced the answers (ADR-017), so judge scores are same-family self-evaluation. Read them as relative \u2014 valid for comparing configurations with each other, not as ground truth."
+}
