@@ -15,11 +15,17 @@ hold, and only the first is usually implemented:
 
 ## How Sutra implements it
 - **One versioned prompt file**, `prompts/answer.v1.md`, holding both halves of the request split
-  by a `<<<USER>>>` delimiter. Stable instructions sit before the first variable byte, which is a
-  cost decision: prompt caching bills a repeated prefix at a fraction of the input rate, but only
-  while that prefix is byte-identical. Interpolating anything into the system half would
-  invalidate the cache on every request. A test asserts the system half is identical across two
-  different questions.
+  by a `<<<USER>>>` delimiter. Stable instructions sit before the first variable byte, so that a
+  repeated prefix can be billed at the cached rate, and a test asserts the system half is
+  identical across two different questions.
+
+  **Measured, and it does not pay yet.** The system block is about 425 tokens, and OpenAI caches
+  only prefixes above a 1024-token minimum, so the stable half cannot hit the cache on its own.
+  The one cache hit observed in Phase 2 (`cached_tokens 2537 of 2540`, cutting that call from
+  $0.000300 to $0.0000687) happened only because the *whole* input repeated — same question, same
+  retrieved passages. The ordering is the precondition for caching rather than a saving in
+  itself, and it starts paying when the stable block grows past the minimum, which memory and
+  guardrail instructions will do in Phases 5 and 6.
 - **`AnswerDraft` is what the model returns** — flat, primitive fields, no defaults, because
   provider strict-schema modes reject optionals and nested unions, and a schema the provider
   silently declines to enforce is worse than none.

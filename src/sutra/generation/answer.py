@@ -26,10 +26,15 @@ PROMPT_NAME = "answer"
 
 # Splits the stable instructions from the per-request part of the prompt file.
 #
-# # CONCEPT: Prompt caching bills repeated prefixes at a fraction of the input rate, but only
-# # while the prefix is byte-identical. Keeping every stable instruction ahead of the first
-# # variable byte is therefore a cost decision, not a style one — interpolating anything into
-# # the system block would invalidate the cache on every single request.
+# # CONCEPT: Prompt caching bills a repeated prefix at a fraction of the input rate, but only
+# # while that prefix is byte-identical, so every stable instruction belongs ahead of the first
+# # variable byte. Interpolating into the system block would invalidate the cache on every
+# # request.
+#
+# Measured caveat: this block is ~425 tokens and OpenAI caches only prefixes above a 1024-token
+# minimum, so it cannot hit the cache by itself today. The ordering is the precondition, not the
+# saving; it begins to pay once memory and guardrail instructions (Phases 5 and 6) push the
+# stable block past that floor.
 USER_DELIMITER = "<<<USER>>>"
 
 # Enough for a paragraph answer plus citations. Phase 5 replaces this with a real token budget

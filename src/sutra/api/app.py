@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from sutra import __version__
+from sutra.api.routes_chat import router as chat_router
 from sutra.api.routes_health import router as health_router
 from sutra.config import get_settings
 from sutra.db.engine import dispose_engine
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(health_router, prefix="/v1")
+    app.include_router(chat_router, prefix="/v1")
     return app
 
 
