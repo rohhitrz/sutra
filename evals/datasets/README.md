@@ -29,6 +29,14 @@ quote and asserts that it fails — a checker that has never been watched failin
 
 `doc_slug` is the corpus file's stem, without the `.md` (for example `06_places_wiki`).
 
+### Reading the datasets
+
+JSON Lines is one object per line by definition, which is right for a file the eval runner streams
+and wrong for a file a person reads. So `readable/golden_qa.json` and `readable/attacks.json` hold
+the same rows indented, **generated** by `make datasets` and never edited by hand. `make validate`
+fails if they have drifted, because a stale view of your ground truth reads exactly like the real
+thing. To change a row: edit the `.jsonl`, run `make datasets`, then `make validate`.
+
 ## ID scheme
 
 - `gq-001` … `gq-042` — golden QA rows, numbered in category order.

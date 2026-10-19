@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pytest
+from evals.render_datasets import main as render_main
 from evals.validate_datasets import (
     ATTACK_BUDGET,
     GOLDEN_BUDGET,
@@ -79,3 +80,18 @@ def test_the_datasets_are_one_json_object_per_line() -> None:
     for filename in ("golden_qa.jsonl", "attacks.jsonl"):
         for line in (DATASET_DIR / filename).read_text().splitlines():
             assert isinstance(json.loads(line), dict)
+
+
+def test_readable_mirrors_are_in_sync_with_the_jsonl_sources() -> None:
+    """A generated view that has drifted is worse than no view: it reads as ground truth."""
+    assert render_main(check=True) == 0
+
+
+def test_a_stale_mirror_is_detected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Negative control for the sync check."""
+    import evals.render_datasets as renderer
+
+    monkeypatch.setattr(renderer, "READABLE_DIR", tmp_path)
+    (tmp_path / "golden_qa.json").write_text("{}")
+    (tmp_path / "attacks.json").write_text("{}")
+    assert renderer.main(check=True) == 1

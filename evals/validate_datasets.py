@@ -20,6 +20,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from evals.render_datasets import DATASETS, READABLE_DIR, render
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORPUS_DIR = REPO_ROOT / "data" / "corpus"
 DATASET_DIR = REPO_ROOT / "evals" / "datasets"
@@ -152,6 +154,18 @@ def check_attack_shape(rows: list[AttackRow]) -> list[str]:
     ]
 
 
+def check_readable_mirrors() -> list[str]:
+    """The indented copies under datasets/readable/ are generated, so drift is a build failure."""
+    errors: list[str] = []
+    for name in DATASETS:
+        target = READABLE_DIR / f"{name}.json"
+        if not target.exists():
+            errors.append(f"{target.name} is missing — run `make datasets`")
+        elif target.read_text() != render(name):
+            errors.append(f"{target.name} is stale — run `make datasets`")
+    return errors
+
+
 def report(stage: str, errors: list[str]) -> bool:
     if errors:
         print(f"\nFAIL  {stage} — {len(errors)} problem(s):")
@@ -193,6 +207,7 @@ def main() -> int:
         ("must_refuse agrees with category", check_golden_shape(golden)),
         ("attack expectations agree with category", check_attack_shape(attacks)),
         ("every golden quote exists verbatim in its corpus file", check_quotes(golden, corpus)),
+        ("the readable mirrors match the .jsonl sources", check_readable_mirrors()),
     ]
 
     ok = True

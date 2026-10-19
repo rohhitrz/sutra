@@ -53,9 +53,12 @@ comparing profiles against each other, not as ground truth.
 - `evals/datasets/attacks.jsonl` — 40 rows (30 attacks + 10 benign look-alikes)
 - `evals/datasets/README.md` — the trap map: every trap, the row that tests it, and what a wrong
   answer looks like
-- `evals/validate_datasets.py` + `make validate` — six checks, including the quote check
-- `tests/test_datasets.py` — 7 tests, including a negative control that proves the validator fails
-  on an invented quote
+- `evals/validate_datasets.py` + `make validate` — seven checks, including the quote check
+- `evals/render_datasets.py` + `make datasets` — indented, readable mirrors of both datasets under
+  `evals/datasets/readable/`, generated from the `.jsonl` sources, with drift checked by
+  `make validate`
+- `tests/test_datasets.py` — 9 tests, including negative controls proving the validator fails on an
+  invented quote and on a stale mirror
 - `evals` added to the ruff and pyright paths
 
 ## What was built (Phase 0)

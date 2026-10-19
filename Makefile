@@ -1,4 +1,4 @@
-.PHONY: help up down dev ingest eval validate test lint fmt migrate revision install
+.PHONY: help up down dev ingest eval validate datasets test lint fmt migrate revision install
 
 help:  ## show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,9 @@ eval:  ## run the eval suite, write a report to evals/reports/
 
 validate:  ## check the golden datasets against the frozen corpus
 	uv run python -m evals.validate_datasets
+
+datasets:  ## re-render the readable copies of the datasets after editing a .jsonl
+	uv run python -m evals.render_datasets
 
 test:  ## run the test suite
 	uv run pytest
