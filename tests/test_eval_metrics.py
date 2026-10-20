@@ -6,6 +6,8 @@ tested on hand-built cases where the right answer is obvious by inspection.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 from evals.metrics.grounding import check_figures
 from evals.metrics.judges import JudgeResult, JudgeScores, summarise_judges
@@ -228,3 +230,59 @@ def test_a_figure_present_in_the_context_is_supported():
 def test_every_distinct_unsupported_figure_is_listed_once():
     check = check_figures("It was 999 in 999, and also 1234.", "nothing")
     assert check.unsupported == ["999", "1234"]
+
+
+def test_a_figure_is_not_supported_by_being_a_substring_of_a_longer_one():
+    """The corpus is set in 1143 and 1144, so a substring test clears almost any three-digit
+    fabrication: `143` appears inside every date in the book. That defeats the whole point of
+    having a deterministic check beside a judge known to rubber-stamp."""
+    assert check_figures("The toll was 143 marks.", "Frostmark of 1143.").unsupported == ["143"]
+    assert check_figures("It cost 144.", "the spring of 1144").unsupported == ["144"]
+    # The containing figure itself is still supported.
+    assert check_figures("Recorded in 1143.", "Frostmark of 1143.").grounded
+
+    # And the reverse direction: a long figure is not supported by a short one inside it.
+    assert check_figures("A population of 68,000.", "68 wagons").unsupported == ["68,000"]
+
+
+# ---------------------------------------------------------------------------
+# the CLI guard on the committed baseline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--baseline", "--limit", "5"],
+        ["--baseline", "--skip-coverage"],
+        ["--baseline", "--limit", "5", "--skip-coverage"],
+    ],
+)
+def test_baseline_refuses_flags_that_make_the_run_partial(argv: list[str], monkeypatch):
+    """`evals/reports/baseline.json` is the reference every later run is compared against.
+    A five-row run or one with the coverage precondition skipped would overwrite it with
+    numbers that are not comparable, and the file carries nothing that would say so."""
+    from evals.runners import run as run_cli
+
+    monkeypatch.setattr(sys, "argv", ["run.py", *argv])
+    with pytest.raises(SystemExit) as exit_info:
+        run_cli.main()
+
+    assert exit_info.value.code == 2  # argparse's usage error
+
+
+def test_baseline_alone_is_allowed_through_the_guard(monkeypatch):
+    """The negative control: the guard must not block a complete run, which is the one way the
+    baseline is ever meant to be written."""
+    from evals.runners import run as run_cli
+
+    monkeypatch.setattr(sys, "argv", ["run.py", "--baseline"])
+    # Stop immediately after the guard — this test is about argument validation, not a real run.
+    sentinel = RuntimeError("reached profile loading")
+
+    def _boom(_name: str) -> None:
+        raise sentinel
+
+    monkeypatch.setattr(run_cli.Profile, "load", staticmethod(_boom))
+    with pytest.raises(RuntimeError, match="reached profile loading"):
+        run_cli.main()

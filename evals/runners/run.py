@@ -35,6 +35,25 @@ def main() -> int:
         format="%(levelname)s %(name)s %(message)s",
     )
 
+    # The committed baseline is the reference every later run is read against, so it may only
+    # ever be written by a complete, honestly-measured run. `--limit 5 --baseline` would
+    # overwrite 42 rows with 5 and leave nothing in the file saying so; `--skip-coverage`
+    # understates recall by construction, which its own help text admits.
+    if args.baseline and (args.limit is not None or args.skip_coverage):
+        disqualifying = [
+            name
+            for name, used in (
+                ("--limit", args.limit is not None),
+                ("--skip-coverage", args.skip_coverage),
+            )
+            if used
+        ]
+        parser.error(
+            f"--baseline cannot be combined with {' or '.join(disqualifying)}: the committed "
+            "baseline is the reference for every later run and must come from a complete one. "
+            "Drop the flag, or run without --baseline and promote the report by hand."
+        )
+
     profile = Profile.load(args.profile)
     report = asyncio.run(run(profile, limit=args.limit, skip_coverage=args.skip_coverage))
     md_path, json_path = write_reports(report, as_baseline=args.baseline)

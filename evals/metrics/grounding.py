@@ -57,6 +57,18 @@ def _canonical(text: str) -> str:
     return re.sub(r"(?<=\d),(?=\d)", "", text)
 
 
+def _figures_in(text: str) -> set[str]:
+    """Every figure the text *states*, as canonical digit strings.
+
+    Support has to be tested against this set and never as a substring of the raw context. A
+    substring test counts a figure as supported whenever its digits appear anywhere inside a
+    longer number, and on this corpus that is not a corner case: the two book years are 1143
+    and 1144, so a fabricated `143` or `144` is "supported" by every passage that mentions a
+    date. That silently disarms the one check that does not share the judge's blind spots.
+    """
+    return {match.group(0) for match in _FIGURE.finditer(_canonical(text))}
+
+
 def check_figures(answer: str, context: str) -> GroundingCheck:
     """Every digit figure in `answer` that does not appear in `context`.
 
@@ -73,8 +85,12 @@ def check_figures(answer: str, context: str) -> GroundingCheck:
       - **Presence, not meaning.** A figure lifted from the wrong row of a ledger is "supported"
         by this check. Only the judge can see that, which is why both are reported.
       - Figures below `MIN_INTERESTING` are skipped as structural.
+      - **Whole figures only.** `143` is not supported by `1143`. The cost of that strictness is
+        that a figure written differently in the context ("forty-one thousand" against `41,000`)
+        reads as unsupported — a false alarm, which the runner surfaces for a human, rather than
+        a false clearance, which nobody ever sees.
     """
-    canonical_context = _canonical(context)
+    context_figures = _figures_in(context)
     figures: list[str] = []
     unsupported: list[str] = []
 
@@ -91,7 +107,7 @@ def check_figures(answer: str, context: str) -> GroundingCheck:
         if raw in figures:
             continue
         figures.append(raw)
-        if canonical not in canonical_context and raw not in context:
+        if canonical not in context_figures:
             unsupported.append(raw)
 
     return GroundingCheck(figures_in_answer=figures, unsupported=unsupported)

@@ -206,8 +206,17 @@ class RunReport(BaseModel):
     figure_support_rate: float
 
     total_cost_usd: float
+    # Whole-run totals: answer calls *and* judge calls, matching what `total_cost_usd` covers.
+    # These counted judge calls only for one run, which understated input tokens by about 44%
+    # while the cost beside them was complete — the pair looked self-consistent and was not.
+    # The split is kept below rather than dropped, because judge spend dominating a run (three
+    # calls per row against one) is a real fact about the harness worth seeing.
     total_input_tokens: int
     total_output_tokens: int
+    answer_input_tokens: int
+    answer_output_tokens: int
+    judge_input_tokens: int
+    judge_output_tokens: int
     latency_p50_ms: float
     latency_p95_ms: float
 
@@ -405,8 +414,14 @@ async def run(
             sum(r.grounding.support_rate for r in rows) / len(rows) if rows else 1.0
         ),
         total_cost_usd=sum(r.cost_usd for r in rows),
-        total_input_tokens=sum(j.input_tokens for r in rows for j in r.judges.results),
-        total_output_tokens=sum(j.output_tokens for r in rows for j in r.judges.results),
+        total_input_tokens=sum(r.answer_input_tokens for r in rows)
+        + sum(j.input_tokens for r in rows for j in r.judges.results),
+        total_output_tokens=sum(r.answer_output_tokens for r in rows)
+        + sum(j.output_tokens for r in rows for j in r.judges.results),
+        answer_input_tokens=sum(r.answer_input_tokens for r in rows),
+        answer_output_tokens=sum(r.answer_output_tokens for r in rows),
+        judge_input_tokens=sum(j.input_tokens for r in rows for j in r.judges.results),
+        judge_output_tokens=sum(j.output_tokens for r in rows for j in r.judges.results),
         latency_p50_ms=statistics.median(latencies),
         latency_p95_ms=latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)],
     )
