@@ -289,3 +289,48 @@ def test_row_keys_must_be_real_columns():
 
     with pytest.raises(ValueError, match=r"not columns on 'chunks'.*meta"):
         _validate_row_keys([{**good, "meta": {}}])
+
+
+# ---------------------------------------------------------------------------
+# the token counter that feeds the oversize guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.model
+def test_count_tokens_does_not_saturate_at_the_sequence_limit():
+    """The counter must keep counting past 512, or the guard it feeds is decorative.
+
+    fastembed configures its tokenizer to truncate at the model's sequence limit. Counting on
+    that tokenizer makes every oversized text report exactly `MAX_SEQUENCE_TOKENS`, so a chunk
+    that would be silently cut off looks like one sitting exactly on the line. Phase 2 never
+    noticed because `chunk_tokens + chunk_overlap` is 460 by config, but Phase 3's semantic
+    chunking makes chunk size data-dependent, and then this number has to be true.
+    """
+    from sutra.ingestion.embed import MAX_SEQUENCE_TOKENS, get_embedder
+
+    embedder = get_embedder()
+
+    assert embedder.count_tokens("The Archivist walked to the waystone.") < 20
+
+    long_text = "waystone " * 4444
+    counted = embedder.count_tokens(long_text)
+    assert counted > MAX_SEQUENCE_TOKENS, (
+        f"counted {counted} tokens for a text of roughly 8,900 — the counting tokenizer is "
+        "still truncating"
+    )
+
+
+@pytest.mark.model
+def test_counting_does_not_disturb_the_embedding_tokenizer():
+    """Counting gets a copy. Disabling truncation on the tokenizer fastembed is *using* would
+    push over-length sequences into ONNX, trading a silent truncation for a crash."""
+    from sutra.ingestion.embed import FastEmbedEmbedder
+
+    # The concrete class, not the Protocol: this asserts on the library state behind it.
+    embedder = FastEmbedEmbedder()
+    embedder.count_tokens("waystone " * 4444)
+
+    # Reaching into the embedder is the point here: the assertion is about library state.
+    model = embedder._ensure_model()
+    assert model.model.tokenizer.truncation is not None  # type: ignore[attr-defined]
+    assert len(embedder.embed_passages(["waystone " * 4444])[0]) == embedder.dims

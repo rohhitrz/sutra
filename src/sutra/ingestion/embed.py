@@ -44,6 +44,7 @@ class FastEmbedEmbedder:
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
         self._model: object | None = None
+        self._counting_tokenizer: object | None = None
 
     def _ensure_model(self) -> object:
         if self._model is None:
@@ -60,18 +61,40 @@ class FastEmbedEmbedder:
     def dims(self) -> int:
         return self._settings.embedding_dims
 
+    def _ensure_counting_tokenizer(self) -> object:
+        """A truncation-free *copy* of the model's tokenizer, for counting only.
+
+        fastembed configures its tokenizer with truncation at the model's 512-token sequence
+        limit. That is right for embedding and useless for counting: every text at or over the
+        limit reports exactly 512, so the oversize guard this number feeds can never fire — a
+        40,000-character string and a 512-token one are indistinguishable. `add_special_tokens`
+        does not affect it; truncation is tokenizer state, not an encode argument.
+
+        The copy matters. Calling `no_truncation()` on the tokenizer fastembed is using would
+        change what actually gets embedded and push over-length sequences into ONNX, so the
+        counter gets its own instance and the embedding path is left exactly as the library
+        configured it.
+        """
+        if self._counting_tokenizer is None:
+            from tokenizers import Tokenizer
+
+            model = self._ensure_model()
+            source = model.model.tokenizer  # type: ignore[attr-defined]
+            clone = Tokenizer.from_str(source.to_str())
+            clone.no_truncation()
+            clone.no_padding()
+            self._counting_tokenizer = clone
+        return self._counting_tokenizer
+
     def count_tokens(self, text: str) -> int:
-        """Token count from the model's *own* tokenizer.
+        """True token count from the model's *own* tokenizer, unbounded by the 512 limit.
 
         Chunk sizing must use this and not a word-count heuristic: the 512-token ceiling is
         defined by this tokenizer, so any other counter is guessing at the one number that
         decides whether a chunk gets silently truncated.
         """
-        model = self._ensure_model()
-        tokenizer = model.model.tokenizer  # type: ignore[attr-defined]
-        # The tokenizer truncates at 512 by default, which would make every long string report
-        # exactly 512 and hide oversized chunks. Encoding without truncation gives the true length.
-        return len(tokenizer.encode(text, add_special_tokens=True).ids)
+        tokenizer = self._ensure_counting_tokenizer()
+        return len(tokenizer.encode(text, add_special_tokens=True).ids)  # type: ignore[attr-defined]
 
     def embed_passages(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed corpus text. Batched by fastembed internally."""

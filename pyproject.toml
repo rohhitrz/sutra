@@ -97,4 +97,5 @@ asyncio_mode = "auto"
 addopts = "-q --strict-markers"
 markers = [
     "integration: needs a running Postgres (deselect with -m 'not integration')",
+    "model: loads the real ONNX embedding model (deselect with -m 'not model')",
 ]
