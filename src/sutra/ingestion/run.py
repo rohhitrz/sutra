@@ -105,15 +105,25 @@ async def _occupied_slot(session: AsyncSession, index_version: int) -> OccupiedS
 
     The whole fingerprint is read, not just its digest, so a mismatch can report which parameter
     changed instead of two opaque hashes.
+
+    Occupancy is decided by **whether rows exist**, never by whether a fingerprint can be read
+    from them. Selecting the JSON path directly conflates the two: a slot holding chunks whose
+    metadata lacks `index_fingerprint` comes back as SQL NULL, reads as an empty slot, and skips
+    the delete below — which then either trips `uq_chunk_position` or, worse, leaves the slot
+    holding two chunkings blended together. "Rows but no readable fingerprint" is the third
+    state this class exists to carry, so it has to survive the query that detects it.
     """
-    stmt = (
-        select(ChunkRow.meta["index_fingerprint"])
-        .where(ChunkRow.index_version == index_version)
-        .limit(1)
-    )
-    stored = (await session.execute(stmt)).scalar_one_or_none()
-    if stored is None:
+    stmt = select(ChunkRow.meta).where(ChunkRow.index_version == index_version).limit(1)
+    # `.first()`, not `scalar_one_or_none()`: a row whose `metadata` is NULL is still a row, and
+    # the scalar form would report it as no row at all.
+    row = (await session.execute(stmt)).first()
+    if row is None:
         return None
+
+    meta = row[0]
+    stored = meta.get("index_fingerprint") if isinstance(meta, dict) else None
+    if not isinstance(stored, dict):
+        return OccupiedSlot(raw={}, fingerprint=None)
     try:
         return OccupiedSlot(raw=stored, fingerprint=IndexFingerprint.model_validate(stored))
     except ValidationError:
@@ -259,6 +269,12 @@ def _blocked_message(slot: int, occupied: OccupiedSlot, fingerprint: IndexFinger
         "Either bump INDEX_VERSION to keep both, or re-run with --force to replace it."
     )
     if occupied.fingerprint is None:
+        if not occupied.raw:
+            return (
+                f"index slot {slot} holds chunks that carry no index fingerprint at all, so "
+                f"there is nothing to compare the current one against.\n"
+                f"{refusal}"
+            )
         missing = sorted(set(IndexFingerprint.model_fields) - set(occupied.raw))
         return (
             f"index slot {slot} holds a fingerprint written by an older schema "

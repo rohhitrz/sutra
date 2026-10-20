@@ -202,3 +202,34 @@ async def test_tsvector_and_embedding_are_populated(settings: Settings, clean_sl
         total, embedded, tsv = (await session.execute(stmt)).one()
 
     assert total == embedded == tsv, "every chunk needs both an embedding and a tsvector"
+
+
+async def test_a_slot_holding_chunks_without_a_fingerprint_is_occupied_not_empty(
+    settings: Settings, clean_slot: None
+):
+    """Occupancy is decided by rows, not by whether a fingerprint can be read from them.
+
+    `test_row_keys_must_be_real_columns` records the bug that produced exactly this state:
+    chunks written with empty metadata. Detecting occupancy by selecting the JSON path returns
+    SQL NULL for those rows, which reads as an empty slot — so ingestion skips the delete and
+    then either trips `uq_chunk_position` or leaves two chunkings blended in one slot. Both
+    failures are worse than the refusal, and the second is silent.
+    """
+    first = await _ingest(settings)
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await session.execute(
+            update(ChunkRow).where(ChunkRow.index_version == TEST_SLOT).values(meta={})
+        )
+        await session.commit()
+
+    with pytest.raises(IngestionBlocked, match=r"no index fingerprint at all"):
+        await _ingest(settings)
+    assert await _chunk_count(TEST_SLOT) == first.chunks, "the slot must be untouched"
+
+    # --force is the way out, and it must leave exactly one chunking behind — the bug this
+    # guards would have doubled the rows or raised a constraint violation here.
+    forced = await _ingest(settings, force=True)
+    assert forced.status == "ingested"
+    assert await _chunk_count(TEST_SLOT) == first.chunks
