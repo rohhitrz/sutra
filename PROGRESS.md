@@ -3,7 +3,8 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 3 — Advanced retrieval + routing + semantic cache** · Status: ⬜ not started
+**Phase 3 — Advanced retrieval + routing + semantic cache** · Status: 🟨 in progress
+(review fixes landed and the baseline re-recorded; step 1 not started)
 
 ## Phase status
 
@@ -12,7 +13,7 @@
 | 0 | Foundation | ✅ done | 2026-10-19 |
 | 1 | Corpus + golden datasets | ✅ done | 2026-10-19 |
 | 2 | Ingestion + naive RAG + eval harness | ✅ done | 2026-10-20 |
-| 3 | Advanced retrieval + routing + semantic cache | ⬜ | |
+| 3 | Advanced retrieval + routing + semantic cache | 🟨 | 2026-10-20 |
 | 4 | Observability | ⬜ | |
 | 5 | Generation, context management, memory | ⬜ | |
 | 6 | Guardrails | ⬜ | |
@@ -27,22 +28,45 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Date | Config / change | Recall@5 | MRR | Faithfulness | Answer correctness | p50 latency | Cost/query |
 |---|---|---|---|---|---|---|---|
-| 2026-10-20 | **baseline** — `naive`, vector-only, k=5, answer.v1 | 61.9% | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
+| 2026-10-20 | ~~`naive` baseline, as first recorded~~ — **superseded**, see below | 61.9% | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
+| 2026-10-20 | **baseline** — `naive`, vector-only, k=5, answer.v1 (harness fixes applied) | 61.9% | 0.492 | 1.000 | 0.821 | 3157 ms | $0.00055 |
 
-Also from the baseline run (`evals/reports/baseline.md`): context precision 19.5%, hit rate@5
-73.8%, refusal recall 100% (6/6), false refusal 11.1% (4/36), $0.0212 for the whole 42-row run.
+Also from the current baseline run (`evals/reports/baseline.md`): context precision 19.5%,
+refusal recall 100% (6/6), false refusal 11.1% (4/36), $0.0232 for the whole 42-row run,
+239,276 input tokens (51.2% served from the provider's prefix cache) and 20,702 output.
+
+**Why the baseline was re-recorded.** Three defects in the eval harness were fixed (see the
+review-fix section below), two of which changed what the report says: token totals counted judge
+calls only, and the figure check cleared a fabrication whenever its digits appeared inside a
+longer number. The system under measurement did not change. The proof is that **recall@5, MRR and
+context precision are identical to the digit across both rows** — those metrics are exact and
+depend only on the index, which was verified byte-identical (same 49 chunks, same text, same
+token counts).
+
+The judge and latency columns moved for ordinary run-to-run reasons, not because of the fixes.
 
 Weakest categories by recall@5: multi-hop 37.5%, routing 44.4%. Strongest: numeric 86.1%.
 Weakest by correctness: routing 0.33, multi-hop 0.62.
 
-**Two caveats that govern how this scoreboard may be read.**
+**Three caveats that govern how this scoreboard may be read.**
 
-1. **Judge scores carry ±0.05 run-to-run noise.** Three runs on identical configuration gave
-   faithfulness 0.940 / 0.964 / 0.988 and correctness 0.726 / 0.774 / 0.774. Retrieval metrics
-   are exact and repeated to the digit every time. A Phase 3 change that moves a judge score by
-   0.02 has moved nothing measurable; a change that moves recall by 0.02 has.
+1. **Judge scores carry run-to-run noise, and the band is wider than ±0.05.** Five runs on
+   identical configuration have now given faithfulness 0.940 / 0.952 / 0.964 / 0.988 / 1.000 and
+   correctness 0.726 / 0.762 / 0.774 / 0.774 / 0.821. Retrieval metrics are exact and repeat to
+   the digit every time. A Phase 3 change that moves a judge score by 0.05 has moved nothing
+   measurable; a change that moves recall by 0.02 has.
 2. **The faithfulness judge is demonstrably unreliable in the direction that matters** — see
-   known issue 2. Treat 0.964 as an upper bound, not a measurement.
+   known issue 2. The current run makes this as stark as it gets: the judge returned
+   **faithfulness 1.000 on all 42 rows** while the deterministic figure check flagged
+   **8 of those same rows** as asserting a figure that appears nowhere in their context. Treat
+   1.000 as an upper bound, and specifically as an upper bound that is provably wrong here.
+
+3. **Cost per run swings ~50% on prefix-cache warmth alone.** Three runs over the same index
+   doing the same work, with input-token counts within 0.1% of each other, cost $0.0212,
+   $0.0348 and $0.0232 — the difference being that the provider served 0% to 51.2% of input
+   tokens from its cache depending on how recently the last run finished. The report now records
+   `total_cached_tokens` so a cost delta can be checked before it is read as a result. **Do not
+   put a cost delta in a Phase 3 scoreboard row without the cached share beside it.**
 
 **Caveat to carry forward (ADR-017):** `LLM_STRONG` is also the judge model, so judge scores are
 same-family self-evaluation. Read faithfulness and correctness as **relative** — valid for
@@ -77,6 +101,39 @@ comparing profiles against each other, not as ground truth.
   toolchain. Dev-only `httpx2` (not `httpx`) because the `openai` SDK is built on httpx2.
 - **ADR-019** — `make eval` is exempt from the ">200 LLM calls needs explicit OK" rule, which one
   eval run exceeds by construction.
+
+## Review fixes (2026-10-20, before Phase 3 step 1)
+
+An external code review raised seven findings. All seven reproduced; one detail in the report
+was wrong (the token counter saturates at 512, not at 3). Fixed in six commits, each with a
+test, lint and types clean. Three of the fixes were verified as negative controls — the test
+was confirmed to fail with the fix reverted, which for the slot bug meant reproducing the exact
+`uq_chunk_position` violation the review predicted.
+
+| Finding | Fix |
+|---|---|
+| `complete()`/`structured()` ignored `model=` and answered from `LLM_STRONG` | model threaded through `_call_with_retries`; an explicit model now gets a chain of one |
+| eval token totals summed judge calls while cost covered answer calls too | totals cover both; answer/judge split kept beside them |
+| `count_tokens` saturated at 512, so the truncation guard could never fire | counting runs on a truncation-free copy of the tokenizer |
+| figure check credited `143` to `1143`, disarming the cross-check on the judge | support tested against the set of figures the context states |
+| a slot holding chunks without `index_fingerprint` read as empty, skipping the delete | occupancy decided by row existence, not fingerprint readability |
+| blocking ONNX `embed_query` on the event loop in `/v1/chat` | awaited in a thread; test asserts on thread identity, not timing |
+| `--limit` with `--baseline` overwrote the committed reference | the CLI refuses the combination |
+
+Two things worth carrying forward that the review did not ask for:
+
+- **The chunking fix is a no-op on the current corpus, verified rather than assumed.** Slot 1
+  re-chunks to the same 49 chunks with identical text and token counts, so the committed
+  baseline's index still stands and no re-ingest was needed. At `chunk_tokens=400` any piece
+  reporting 512 was already over the split threshold. It starts mattering in Phase 3, where
+  semantic chunking makes chunk size data-dependent.
+- **Correcting the token totals exposed a second problem** — cost swinging 50% on prefix-cache
+  warmth with nothing in the report able to explain it. `total_cached_tokens` was added, and
+  the reported cost now reconciles to the cent against the cached rate.
+
+The blocking-embedder fix matters more from Phase 3 on than it did here: the cross-encoder
+reranker is far heavier than the embedder and lands on the same event loop. `embed_passages` in
+ingestion is still synchronous and deliberately so — it runs in a CLI script, not a request.
 
 ## What was built (Phase 2)
 
@@ -179,9 +236,20 @@ comparing profiles against each other, not as ground truth.
    judges against the ~10 hand-labelled rows ARCHITECTURE §11 asks for.** Until then read
    faithfulness as an upper bound.
 
-3. **Judge scores carry ±0.05 run-to-run noise** (measured: three identical runs gave
-   faithfulness 0.940/0.964/0.988, correctness 0.726/0.774/0.774). Retrieval metrics are exact.
-   Do not read a small judge delta as a result.
+   **Sharpened on the corrected baseline.** The judge now returns **1.000 across all 42 rows**
+   while the figure check flags **8 of them**. The two cannot both be right, and the figure
+   check is the one whose reasoning can be inspected. Note also that the figure check only
+   became trustworthy with this round of fixes — it had been clearing any fabrication whose
+   digits appeared inside a longer number, which on a corpus set in 1143/1144 is most
+   three-digit fabrications.
+
+3. **Judge scores carry run-to-run noise of at least ±0.05** (measured over five identical runs:
+   faithfulness 0.940–1.000, correctness 0.726–0.821). Retrieval metrics are exact. Do not read
+   a judge delta smaller than the band as a result.
+
+3b. **Cost per run is not a stable measurement.** It swings ~50% on how warm the provider's
+   prefix cache is (0% to 51.2% of input tokens served cached across three runs doing identical
+   work). `total_cached_tokens` is now in the report; quote it alongside any cost number.
 
 4. **`POST /v1/chat` has no authentication.** `SUTRA_API_KEY` exists in config and nothing checks
    it. Fine for a local dev server; belongs with the Phase 6 guardrail work. Also no rate
@@ -227,11 +295,40 @@ comparing profiles against each other, not as ground truth.
 
 ## Next step
 
-**Phase 2 is done.** `make ingest && make eval` produces the committed baseline at
-`evals/reports/baseline.json`, and its numbers are in the scoreboard above.
+**Phase 2 is done and the review fixes are in.** `make ingest && make eval` produces the
+committed baseline at `evals/reports/baseline.json`, and its numbers are in the scoreboard
+above. 168 tests, lint and types clean, everything pushed.
 
-Start **Phase 3 — Advanced retrieval + routing + semantic cache** with the opening prompt in
-`docs/BUILD_PLAN.md`. The baseline says where the room is:
+**The immediate next step is Phase 3 step 1: semantic chunking + parent-child chunks into index
+slot 2**, with `retrieval/expand.py` in the same step (parent-child means nothing without the
+expansion that swaps children for parents at retrieval time). Then step 2 (contextual prefixes,
+slot 3) and step 3 (FTS + RRF hybrid).
+
+Settled before starting, so they do not need re-litigating:
+
+- **No migration is needed for parent-child.** `chunks.parent_id` and `chunks.context_prefix`
+  already exist from the Phase 0 schema and are written as `None` today.
+- **Carry-forward rule.** Each step is evaluated against the current best profile. A step that
+  does not win still gets its scoreboard row but is *not* carried into the next step's base,
+  so a losing step 1 cannot silently poison steps 2 and 3.
+- **`judge_faithfulness.v2` is deferred, deliberately.** Steps 1–3 are retrieval changes judged
+  on recall@k, MRR and context precision — exact metrics that do not involve a judge. v2 should
+  land before step 4 (rerank) and step 5 (query transforms), where the case for a change starts
+  to rest on answer quality. The figure check, now that it actually works, is the floor until
+  then.
+
+Two measurement problems to solve *in* step 1, not after it:
+
+1. **Recall@5 over 200-token children is not the same measurement as recall@5 over 400-token
+   chunks.** Smaller chunks make a hit harder to land and context precision easier to win, so
+   the headline numbers stop being comparable to the baseline exactly when the first change
+   lands. Add hit-rate measured on the **expanded context actually sent to the generator** as
+   the cross-scheme-comparable number before step 1's row goes on the scoreboard.
+2. **`make coverage` is the gate on step 1.** All 72 cited quotes must still land whole inside a
+   chunk. With ~200-token children this is the realistic way to break the eval ground truth, and
+   it should be checked before any eval run is read.
+
+The baseline says where the room is:
 
 - **multi-hop recall@5 is 37.5% and routing is 44.4%** — the two weakest categories, and between
   them the clearest case for hybrid search and query decomposition
@@ -241,18 +338,28 @@ Start **Phase 3 — Advanced retrieval + routing + semantic cache** with the ope
 - dense-only retrieval is weak at exact-token recall, and the corpus is full of rare proper nouns
   and exact figures on purpose, so the hybrid delta should be visible rather than theoretical
 
-Two things to do before the Phase 3 retrieval work:
-
-1. **Decide whether `judge_faithfulness.v2` comes first** (known issue 2). Phase 3 is measured by
-   judges that are currently provable rubber-stampers, so improving them may be a prerequisite
-   rather than a follow-up.
-2. Remember that a new chunking scheme needs a **new index slot** (`INDEX_VERSION=2`), not
-   `--force` on slot 1 — slot 1 is what the committed baseline was measured against.
+And one thing that has not changed: a new chunking scheme needs a **new index slot**
+(`INDEX_VERSION=2`), not `--force` on slot 1 — slot 1 is what the committed baseline was
+measured against.
 
 ---
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-20 — Phase 3 — review fixes, baseline re-recorded. No Phase 3 code yet.**
+  An external review raised seven findings; all seven reproduced and all seven are fixed, in six
+  commits with tests, three of them verified as negative controls. Two were corrupting the
+  measurements themselves (eval token totals counted judge calls only while cost counted both;
+  the figure check cleared any fabrication whose digits sat inside a longer number, which on a
+  corpus set in 1143/1144 is most of them), so the baseline was re-recorded. Retrieval metrics
+  came back identical to the digit — 61.9% / 0.492 / 19.5% — which is the proof that the fixes
+  changed the measuring and not the system. Correcting the token totals then exposed a problem
+  nobody had flagged: run cost swings ~50% on prefix-cache warmth alone, with nothing in the
+  report able to explain it, so `total_cached_tokens` was added and cost now reconciles to the
+  cent. The baseline's faithfulness came back **1.000 across all 42 rows** while the repaired
+  figure check flags 8 of them — the sharpest evidence yet that the judge is a rubber stamp.
+  168 tests, lint clean.
 
 - **2026-10-20 — Phase 2 — done. Baseline recorded.**
   Built ingestion, the vector-only retrieval baseline, structured generation with citations,
