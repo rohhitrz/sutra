@@ -135,6 +135,41 @@ def test_explicit_model_overrides_role(settings: Settings):
     assert client.resolve_model("fast", "pinned-model") == "pinned-model"
 
 
+# `resolve_model` always honoured `model=`, but for a while `complete` and `structured` resolved
+# the chain without it and quietly answered from `llm_strong`. Testing the resolver alone did not
+# catch that, so these go through the public methods and assert on what the adapter was handed.
+
+
+async def test_complete_honours_an_explicit_model(settings: Settings):
+    adapter = FakeAdapter()
+    client = LLMClient(settings=settings, adapter=adapter)
+    result = await client.complete(PROMPT, role="strong", model="gpt-6-sol")
+
+    assert adapter.calls == ["gpt-6-sol"]
+    assert result.model == "gpt-6-sol"
+
+
+async def test_structured_honours_an_explicit_model(settings: Settings):
+    adapter = FakeAdapter()
+    client = LLMClient(settings=settings, adapter=adapter)
+    result = await client.structured(PROMPT, AnswerSchema, role="strong", model="gpt-6-sol")
+
+    assert adapter.calls == ["gpt-6-sol"]
+    assert result.model == "gpt-6-sol"
+
+
+async def test_an_explicit_model_does_not_fall_back(settings: Settings):
+    """A pinned model is a deliberate choice; answering from a different one would misreport it."""
+    settings = settings.model_copy(update={"llm_fallback_models": ["gpt-6-luna"]})
+    adapter = FakeAdapter(always_fail={"gpt-6-sol"})
+    client = LLMClient(settings=settings, adapter=adapter)
+
+    with pytest.raises(LLMError):
+        await client.complete(PROMPT, model="gpt-6-sol")
+
+    assert adapter.calls == ["gpt-6-sol"] * 3
+
+
 # ------------------------------------------------------------------------ complete
 
 

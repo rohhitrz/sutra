@@ -173,11 +173,16 @@ class LLMClient:
         role: ModelRole | None,
         make_call: Callable[[str], Awaitable[RawResult]],
         started: float,
+        model: str | None = None,
     ) -> tuple[RawResult, int, bool]:
         """Walk the model chain. Within each model, retry transient failures; on exhaustion,
         move to the next model. Returns (result, attempts, used_fallback)."""
-        primary = self.resolve_model(role, None)
-        chain = self._chain(primary)
+        primary = self.resolve_model(role, model)
+        # An explicitly named model is a deliberate choice by the caller — an ablation pinning one
+        # model, say. Falling back off it would answer from a model the caller did not ask for and
+        # report it under their chosen name, so an explicit model gets a chain of one. Retries
+        # still apply: a transient 429 is not a reason to abandon the requested model.
+        chain = [primary] if model is not None else self._chain(primary)
         attempts = 0
         last_error: Exception | None = None
 
@@ -253,7 +258,7 @@ class LLMClient:
             )
 
         raw, attempts, used_fallback = await self._call_with_retries(
-            role=role if model is None else None, make_call=call, started=started
+            role=role, make_call=call, started=started, model=model
         )
         usage = self._price(raw)
         latency_ms = self._trace(
@@ -298,7 +303,7 @@ class LLMClient:
             )
 
         raw, attempts, used_fallback = await self._call_with_retries(
-            role=role if model is None else None, make_call=call, started=started
+            role=role, make_call=call, started=started, model=model
         )
         usage = self._price(raw)
         latency_ms = self._trace(
@@ -335,7 +340,7 @@ class LLMClient:
         would duplicate output. Phase 4 maps these events onto SSE frames.
         """
         started = time.perf_counter()
-        resolved = self.resolve_model(role if model is None else None, model)
+        resolved = self.resolve_model(role, model)
         final: RawResult | None = None
 
         async for delta, result in self._adapter.stream(
