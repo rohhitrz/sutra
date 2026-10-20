@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from pydantic import BaseModel
@@ -80,7 +81,13 @@ async def vector_search(
     # Queries go through `embed_query`, passages through `embed_passages`. For this model under
     # fastembed the two happen to be identical (measured — see `embed.py`), but keeping the seam
     # means swapping in a model with a real query-side instruction is a change in one place.
-    query_vector = embedder.embed_query(query)
+    #
+    # # CONCEPT: A synchronous CPU-bound call inside a coroutine blocks the whole event loop,
+    # # not just its own request. ONNX inference is exactly that, so awaiting it in a thread is
+    # # what keeps `/v1/chat` concurrent — and what lets the eval runner's `concurrency: 4`
+    # # mean anything, since without it four "parallel" rows queue behind one embedder.
+    # # It matters more from Phase 3 on: the cross-encoder reranker is far heavier than this.
+    query_vector = await asyncio.to_thread(embedder.embed_query, query)
 
     # # CONCEPT: The distance operator has to match the one the index was built with
     # # (`vector_cosine_ops`, ADR-004). Mismatch them and Postgres silently declines the index

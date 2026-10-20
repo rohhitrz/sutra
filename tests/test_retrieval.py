@@ -245,3 +245,35 @@ async def test_nearest_really_means_nearest(settings: Settings):
         async with factory() as session:
             await session.execute(delete(ChunkRow).where(ChunkRow.index_version == TEST_SLOT))
             await session.commit()
+
+
+async def test_embedding_runs_off_the_event_loop(stub_index: Settings):
+    """ONNX inference is synchronous and CPU-bound. Calling it directly inside a coroutine
+    blocks the whole event loop, not just its own request — so `/v1/chat` serialises under
+    concurrency and the eval runner's `concurrency: 4` silently means 1.
+
+    Asserting on the thread is the durable form of this test. A timing assertion would be the
+    obvious alternative and would be flaky on a loaded machine; the thread identity is exact.
+    """
+    import threading
+
+    main_thread = threading.main_thread().ident
+    seen: list[int | None] = []
+
+    class ThreadRecordingEmbedder(StubEmbedder):
+        def embed_query(self, text: str) -> list[float]:
+            seen.append(threading.current_thread().ident)
+            return super().embed_query(text)
+
+    factory = get_sessionmaker()
+    async with factory() as session:
+        await vector_search(
+            "where does the Line end?",
+            session=session,
+            settings=stub_index,
+            embedder=ThreadRecordingEmbedder(),
+            index_version=TEST_SLOT,
+        )
+
+    assert seen, "the embedder was never called"
+    assert seen[0] != main_thread, "embed_query ran on the event loop thread"
