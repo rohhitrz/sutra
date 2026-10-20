@@ -188,6 +188,20 @@ def render_markdown(report: RunReport) -> str:
     add(f"| answer latency p50 | {report.latency_p50_ms:.0f} ms |")
     add(f"| answer latency p95 | {report.latency_p95_ms:.0f} ms |")
     add("")
+    add("| tokens | input | output |")
+    add("|---|---|---|")
+    add(f"| answer calls | {report.answer_input_tokens:,} | {report.answer_output_tokens:,} |")
+    add(f"| judge calls | {report.judge_input_tokens:,} | {report.judge_output_tokens:,} |")
+    add(f"| **total** | **{report.total_input_tokens:,}** | **{report.total_output_tokens:,}** |")
+    add("")
+    cached_share = report.total_cached_tokens / max(report.total_input_tokens, 1)
+    add(
+        f"{report.total_cached_tokens:,} input tokens ({cached_share:.1%}) were served from the "
+        "provider's prefix cache at the cached rate. Two runs doing identical work can differ "
+        "substantially on cost from this alone, so read a cost delta against this number before "
+        "reading it as a regression."
+    )
+    add("")
 
     worst = sorted(
         report.rows,

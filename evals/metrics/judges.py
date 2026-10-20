@@ -68,6 +68,11 @@ class JudgeResult(BaseModel):
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
+    # The cached share of `input_tokens`, billed at the provider's cached rate. Recorded
+    # because without it a run's cost is unexplainable: two runs doing identical work can
+    # differ by more than half on cost alone, purely on how warm the provider's prefix
+    # cache was, and a cost delta that large looks like a regression until you can see why.
+    cached_tokens: int = 0
     cost_usd: float = 0.0
     # Set when the judge call failed. The row is then excluded from that judge's average rather
     # than scored 0, because a provider error is not evidence about the answer.
@@ -137,6 +142,7 @@ async def run_judge(
             model=response.model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            cached_tokens=response.usage.cached_tokens,
             cost_usd=response.usage.cost_usd or 0.0,
         )
     except Exception as exc:

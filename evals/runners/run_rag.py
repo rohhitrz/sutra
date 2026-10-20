@@ -121,6 +121,7 @@ class RowResult(BaseModel):
     # bulk of a run (three calls per row against one) and conflating them hides that.
     answer_input_tokens: int = 0
     answer_output_tokens: int = 0
+    answer_cached_tokens: int = 0
 
     @property
     def refusal_correct(self) -> bool:
@@ -217,6 +218,9 @@ class RunReport(BaseModel):
     answer_output_tokens: int
     judge_input_tokens: int
     judge_output_tokens: int
+    # The cached share of `total_input_tokens`. Cost is not comparable between two runs
+    # without it — see `JudgeResult.cached_tokens`.
+    total_cached_tokens: int
     latency_p50_ms: float
     latency_p95_ms: float
 
@@ -291,6 +295,7 @@ async def _run_row(
             grounding=check_figures(answer.answer, context),
             answer_input_tokens=answer.usage.input_tokens,
             answer_output_tokens=answer.usage.output_tokens,
+            answer_cached_tokens=answer.usage.cached_tokens,
             latency_ms=answer.latency_ms,
             cost_usd=(answer.usage.cost_usd or 0.0) + judges.cost_usd,
         )
@@ -422,6 +427,8 @@ async def run(
         answer_output_tokens=sum(r.answer_output_tokens for r in rows),
         judge_input_tokens=sum(j.input_tokens for r in rows for j in r.judges.results),
         judge_output_tokens=sum(j.output_tokens for r in rows for j in r.judges.results),
+        total_cached_tokens=sum(r.answer_cached_tokens for r in rows)
+        + sum(j.cached_tokens for r in rows for j in r.judges.results),
         latency_p50_ms=statistics.median(latencies),
         latency_p95_ms=latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)],
     )
