@@ -4,7 +4,7 @@
 
 ## Current phase
 **Phase 3 — Advanced retrieval + routing + semantic cache** · Status: 🟨 in progress
-(review fixes landed and the baseline re-recorded; step 1 not started)
+(review fixes landed, baseline re-recorded, **step 1 of 7 done**; step 2 next)
 
 ## Phase status
 
@@ -26,10 +26,18 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ## Eval scoreboard
 (Filled from Phase 2 onward. One row per eval run that matters.)
 
-| Date | Config / change | Recall@5 | MRR | Faithfulness | Answer correctness | p50 latency | Cost/query |
-|---|---|---|---|---|---|---|---|
-| 2026-10-20 | ~~`naive` baseline, as first recorded~~ — **superseded**, see below | 61.9% | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
-| 2026-10-20 | **baseline** — `naive`, vector-only, k=5, answer.v1 (harness fixes applied) | 61.9% | 0.492 | 1.000 | 0.821 | 3157 ms | $0.00055 |
+| Date | Config / change | Recall@5 | **Context recall** | MRR | Faithfulness | Answer correctness | p50 latency | Cost/query |
+|---|---|---|---|---|---|---|---|---|
+| 2026-10-20 | ~~`naive` baseline, as first recorded~~ — **superseded**, see below | 61.9% | — | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
+| 2026-10-20 | **baseline** — `naive`, vector-only, k=5, answer.v1 (harness fixes applied) | 61.9% | 61.9% | 0.492 | 1.000 | 0.821 | 3157 ms | $0.00055 |
+| 2026-10-21 | **step 1** — `semantic`, parent-child + expansion, slot 2 | 63.9% | **76.2%** | 0.437 | 0.976 | 0.786 | 2824 ms | $0.00095 |
+
+**Context recall is the column to read across chunking schemes**, and it is new in step 1.
+Recall@5 is measured on the retrieved units, so it moves with their size — slot 2's children
+are 200 tokens against slot 1's 400, so the same retriever fetches less text at the same k
+whatever its quality. Context recall is measured on the passages actually sent to the
+generator. On the flat baseline the two are identical by construction, which is why that row
+can carry the number without being re-run.
 
 Also from the current baseline run (`evals/reports/baseline.md`): context precision 19.5%,
 refusal recall 100% (6/6), false refusal 11.1% (4/36), $0.0232 for the whole 42-row run,
@@ -45,7 +53,45 @@ token counts).
 
 The judge and latency columns moved for ordinary run-to-run reasons, not because of the fixes.
 
-Weakest categories by recall@5: multi-hop 37.5%, routing 44.4%. Strongest: numeric 86.1%.
+### Step 1 — semantic chunking + parent-child (slot 2, `semantic.yaml`)
+
+**Verdict: kept, and carried into step 2.** Context recall 61.9% → **76.2% (+14.3pp)**, and it
+did that while sending the generator *fewer* passages — 4.0 against 5.0, because children of one
+parent dedupe. That is the parent-child thesis working exactly as advertised: search a precise
+unit, read a complete one.
+
+Context recall by category, the comparable view:
+
+| Category | naive | step 1 | |
+|---|---|---|---|
+| single-hop | 58.3% | 83.3% | +25.0 |
+| multi-hop | 37.5% | 60.4% | +22.9 |
+| unanswerable | 83.3% | 100.0% | +16.7 |
+| temporal | 64.3% | 78.6% | +14.3 |
+| routing | 44.4% | 44.4% | — |
+| **numeric** | **86.1%** | **72.2%** | **−13.9** |
+
+Multi-hop was the weakest category in the baseline and gained the most, which is the result
+that justifies the step.
+
+**The one real regression is numeric, and it is not an artefact** — it is −13.9pp on the
+comparable metric too, and MRR fell 0.492 → 0.437 overall. More, shorter units make a denser
+field of near-identical candidates, and the merchant ledger is the worst case because its rows
+genuinely do all resemble each other. Dense retrieval cannot distinguish `946` from `1,034` at
+all. **This is precisely what step 3's keyword half is for, so numeric recall is the number to
+watch there.** If hybrid does not recover it, the parent-child child size is the thing to revisit.
+
+Judges moved within the noise band (faithfulness 1.000 → 0.976, correctness 0.821 → 0.786) and
+should not be read. Unsupported-figure rows fell 8 → 6. False refusals rose 4 → 5.
+
+**Cost: +16.4%, not the +72% the raw numbers show.** The reported $0.0232 → $0.0399 is mostly
+prefix-cache warmth (51.2% cached against 0%). Priced at list rate on both sides the real
+increase is 16.4%, from longer context passages: 2,530 → 3,114 input tokens per answer call.
+This is the first time the `total_cached_tokens` field added during the review fixes earned
+its keep.
+
+Weakest categories by recall@5 in the baseline: multi-hop 37.5%, routing 44.4%. Strongest:
+numeric 86.1%.
 Weakest by correctness: routing 0.33, multi-hop 0.62.
 
 **Three caveats that govern how this scoreboard may be read.**
@@ -299,34 +345,34 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 committed baseline at `evals/reports/baseline.json`, and its numbers are in the scoreboard
 above. 168 tests, lint and types clean, everything pushed.
 
-**The immediate next step is Phase 3 step 1: semantic chunking + parent-child chunks into index
-slot 2**, with `retrieval/expand.py` in the same step (parent-child means nothing without the
-expansion that swaps children for parents at retrieval time). Then step 2 (contextual prefixes,
-slot 3) and step 3 (FTS + RRF hybrid).
+**Step 1 is done and kept** (see the scoreboard). **The immediate next step is Phase 3 step 2:
+contextual retrieval prefixes, into index slot 3**, built on top of slot 2's semantic
+parent-child chunking per the carry-forward rule.
 
-Settled before starting, so they do not need re-litigating:
+The design decision to make before writing step 2: an LLM writes a 1–2 sentence prefix per
+chunk, cached by content hash. The recommendation standing from the approved plan is that the
+prefix is **embedded and indexed but never shown to the generator as citable text** — it is
+model-written, and CLAUDE.md forbids invented lore reaching the corpus surface. The
+`chunks.context_prefix` column already exists for exactly this. Note the call volume: slot 2
+has 104 children, so one prefix each is ~104 fast-model calls, under the 200-call rule but
+worth re-checking if child size shrinks.
 
-- **No migration is needed for parent-child.** `chunks.parent_id` and `chunks.context_prefix`
-  already exist from the Phase 0 schema and are written as `None` today.
+Then step 3 (FTS + RRF hybrid), which is where **numeric recall must recover** — see the step 1
+notes above.
+
+Settled, and not to be re-litigated:
+
+- **No migration is needed.** `chunks.parent_id` and `chunks.context_prefix` both exist from
+  the Phase 0 schema. Step 1 used the first; step 2 uses the second.
 - **Carry-forward rule.** Each step is evaluated against the current best profile. A step that
-  does not win still gets its scoreboard row but is *not* carried into the next step's base,
-  so a losing step 1 cannot silently poison steps 2 and 3.
-- **`judge_faithfulness.v2` is deferred, deliberately.** Steps 1–3 are retrieval changes judged
-  on recall@k, MRR and context precision — exact metrics that do not involve a judge. v2 should
-  land before step 4 (rerank) and step 5 (query transforms), where the case for a change starts
-  to rest on answer quality. The figure check, now that it actually works, is the floor until
-  then.
-
-Two measurement problems to solve *in* step 1, not after it:
-
-1. **Recall@5 over 200-token children is not the same measurement as recall@5 over 400-token
-   chunks.** Smaller chunks make a hit harder to land and context precision easier to win, so
-   the headline numbers stop being comparable to the baseline exactly when the first change
-   lands. Add hit-rate measured on the **expanded context actually sent to the generator** as
-   the cross-scheme-comparable number before step 1's row goes on the scoreboard.
-2. **`make coverage` is the gate on step 1.** All 72 cited quotes must still land whole inside a
-   chunk. With ~200-token children this is the realistic way to break the eval ground truth, and
-   it should be checked before any eval run is read.
+  does not win gets its scoreboard row but is *not* carried into the next step's base.
+- **`judge_faithfulness.v2` is deferred** until before step 4 (rerank), where the case for a
+  change starts to rest on answer quality rather than on exact retrieval metrics.
+- **Compare chunking schemes on `context_recall`, rankers on `recall@k` and MRR.** Step 1 added
+  the metric for this reason; the baseline's value is exact, not estimated, because a flat
+  index with no expansion makes the two identical by construction.
+- **`make coverage` checks search units and context units separately** on a parent-child index,
+  and both must pass. Slot 2: 72/72 on each.
 
 The baseline says where the room is:
 
@@ -346,6 +392,19 @@ measured against.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — Phase 3 — step 1 done: semantic chunking + parent-child.**
+  Built semantic chunking (sentence embeddings, percentile breakpoints), parent-child chunks
+  into index slot 2, and `retrieval/expand.py`. Slot 1 verified untouched — `make ingest` still
+  reports "nothing to do", which the new fingerprint fields were designed to preserve. The
+  headline: **context recall 61.9% → 76.2%** while sending the generator *fewer* passages
+  (4.0 vs 5.0), with multi-hop — the baseline's weakest category — up 22.9pp. Had to add
+  `context_recall` first, because recall@k is not comparable across chunk sizes and would have
+  measured the chunking rather than the retrieval. One real regression: numeric recall
+  −13.9pp, dense retrieval being unable to tell `946` from `1,034`; step 3's keyword half is
+  the test of whether that recovers. A mistake worth remembering: cutting at every semantic
+  breakpoint gave 67 parents averaging 290 tokens against an 800 budget — breakpoints have to
+  be permitted cuts, not required ones. 183 tests, lint clean.
 
 - **2026-10-20 — Phase 3 — review fixes, baseline re-recorded. No Phase 3 code yet.**
   An external review raised seven findings; all seven reproduced and all seven are fixed, in six
