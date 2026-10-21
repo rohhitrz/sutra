@@ -4,7 +4,7 @@
 
 ## Current phase
 **Phase 3 — Advanced retrieval + routing + semantic cache** · Status: 🟨 in progress
-(**steps 1–3 of 7 done**; step 4 — cross-encoder rerank — next)
+(**steps 1–4 of 7 done**, plus judge v2; step 5 — query transforms — next)
 
 ## Phase status
 
@@ -35,6 +35,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-21 | ablation — `keyword_only`, FTS alone, slot 3 | 61.9% | 68.3% | 0.471 | 1.000 | 0.774 | 2860 ms | $0.00092 |
 | 2026-10-21 | **step 3** — `hybrid`, vector + FTS fused by RRF, slot 3 | **73.0%** | **81.0%** | **0.528** | 0.964 | 0.810 | 2572 ms | $0.00085 |
 | 2026-10-21 | step 3 re-graded by **judge v2** — same retrieval, new judge | 73.0% | 81.0% | 0.528 | 0.893 | 0.750 | 2612 ms | $0.00096 |
+| 2026-10-21 | step 4 — rerank on **bare** chunk text (wrong, kept as evidence) | 69.4% | 76.2% | 0.510 | 0.976 | 0.833 | 3742 ms | $0.00129 |
+| 2026-10-21 | **step 4** — `hybrid_rerank`, cross-encoder on indexed text | **77.8%** | **82.1%** | **0.563** | 0.988 | 0.833 | 3502 ms | $0.00116 |
 
 **The faithfulness column changes meaning at the last row.** Rows above it were graded by
 `judge_faithfulness.v1`; from step 4 onward the default is v2, which must quote the span
@@ -208,6 +210,41 @@ reported two fabricated quotes that were a judge dropping markdown asterisks and
 quote on a refusal row. Both were defects in the checker, now fixed and tested, and the
 distinction between "unquoted" and "fabricated" is kept in the data — an over-sensitive
 detector of dishonesty is its own kind of dishonest.
+
+### Step 4 — cross-encoder reranking (`hybrid_rerank.yaml`)
+
+**Verdict: kept, but it is the thinnest win of the phase.** Context recall 81.0% → 82.1%
+(+1.2pp) for **+34% latency** (p50 2612 → 3502 ms). Ranking metrics moved much more than the
+headline: recall@5 73.0% → 77.8%, MRR 0.528 → 0.563, hit rate 83.3% → 88.1%.
+
+**That gap is the finding.** The reranker is clearly doing its job on ranking, and most of
+that gain does not reach the generator — because parent expansion already collapses several
+children into the same parents, so reordering children often changes nothing about what is
+read. **Once you expand to parents, improving child ranking has diminishing returns**, and
+measuring only recall@5 here would have overstated the technique by 4x.
+
+**The first implementation lost on every metric, and the reason is worth keeping.** It scored
+`chunk.text` — the bare verbatim slice — giving the cross-encoder the un-contextualised chunk
+while retrieval had matched against the contextualised one. That is precisely the handicap
+step 2 removed from the embedder, reintroduced one stage later:
+
+| | bare text | indexed text |
+|---|---|---|
+| recall@5 | 69.4% | 77.8% |
+| context recall | 76.2% | 82.1% |
+| MRR | 0.510 | 0.563 |
+| refusal recall | 83.3% | 100% |
+
+Both rows are on the scoreboard. The losing one is kept because "we added a reranker and
+retrieval got worse" is the most common way a correct technique gets abandoned.
+
+By category: unanswerable 83.3% → 100%, single-hop 91.7% → 100%, multi-hop 41.7% → 47.9%
+(the first gain on that category since step 1). **Temporal regressed hard, 92.9% → 64.3%**,
+and is unexplained — it is the third unexplained category movement in this phase and the
+second involving temporal or multi-hop.
+
+Cost is flat at list price ($0.0513 → $0.0490); the spend here is latency, not money, because
+the reranker is local.
 
 Weakest categories by recall@5 in the baseline: multi-hop 37.5%, routing 44.4%. Strongest:
 numeric 86.1%.
