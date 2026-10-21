@@ -122,28 +122,51 @@ def chunks_from_corpus(settings: Settings) -> dict[str, list[str]]:
     return chunks
 
 
-async def chunks_from_db(settings: Settings, index_version: int) -> dict[str, list[str]]:
-    """Read the chunks actually stored in an index slot.
+async def chunks_from_db(settings: Settings, index_version: int) -> dict[str, dict[str, list[str]]]:
+    """Read the chunks actually stored in an index slot, split by role.
 
     Checks what retrieval will really see, so it catches ingestion faults the in-memory path
     cannot — a dropped column, a half-finished run, the wrong slot.
+
+    Parents and children are returned separately, and this matters. In a parent-child index a
+    parent contains all of its children's text, so pooling the two makes coverage pass whenever
+    a quote survives in *any* unit — including when the quote was split across children and
+    only the parent holds it whole. Recall@k is measured on children, so that pooled pass would
+    hide the exact defect this script exists to catch, and the recall drop would be read as a
+    retrieval result. Each role is therefore checked on its own terms:
+
+      - **children** are the search units; a split here understates recall
+      - **parents** are the context units; a split here means the generator never sees the
+        quote whole even when retrieval was perfect
+
+    A flat index has no children, and its rows come back under "search".
     """
     from sqlalchemy import select
 
     from sutra.db.engine import get_sessionmaker
     from sutra.db.models import Chunk as ChunkRow
 
-    chunks: dict[str, list[str]] = {}
+    search: dict[str, list[str]] = {}
+    context: dict[str, list[str]] = {}
     factory = get_sessionmaker()
     async with factory() as session:
         stmt = (
-            select(ChunkRow.meta["doc_slug"].astext, ChunkRow.text)
+            select(ChunkRow.meta["doc_slug"].astext, ChunkRow.text, ChunkRow.parent_id)
             .where(ChunkRow.index_version == index_version)
             .order_by(ChunkRow.meta["doc_slug"].astext, ChunkRow.chunk_no)
         )
-        for slug, text in (await session.execute(stmt)).all():
-            chunks.setdefault(slug, []).append(text)
-    return chunks
+        rows = (await session.execute(stmt)).all()
+
+    has_children = any(parent_id is not None for _, _, parent_id in rows)
+    for slug, text, parent_id in rows:
+        is_search_unit = (parent_id is not None) if has_children else True
+        bucket = search if is_search_unit else context
+        bucket.setdefault(slug, []).append(text)
+
+    roles = {"search": search}
+    if has_children:
+        roles["context"] = context
+    return roles
 
 
 def corpus_text() -> dict[str, str]:
@@ -197,18 +220,25 @@ def main() -> int:
     settings = get_settings()
     if args.from_db:
         slot = args.index_version or settings.index_version
-        chunks = asyncio.run(chunks_from_db(settings, slot))
-        if not chunks:
+        roles = asyncio.run(chunks_from_db(settings, slot))
+        if not any(roles.values()):
             print(f"FAIL  index slot {slot} is empty — run `make ingest` first", file=sys.stderr)
             return 1
         source = f"index slot {slot} in Postgres"
     else:
-        chunks = chunks_from_corpus(settings)
+        roles = {"search": chunks_from_corpus(settings)}
         source = "corpus chunked in memory"
 
-    total = sum(len(v) for v in chunks.values())
-    print(f"{total} chunks over {len(chunks)} documents")
-    return report(check_coverage(chunks, corpus_text()), source)
+    # Every role has to pass. A parent-child index that covers its quotes only in the parents
+    # still breaks recall, which is measured on the children.
+    text = corpus_text()
+    exit_code = 0
+    for role, chunks in roles.items():
+        total = sum(len(v) for v in chunks.values())
+        label = {"search": "search units (what recall is measured on)", "context": "context units"}
+        print(f"\n{total} {role} chunks over {len(chunks)} documents — {label[role]}")
+        exit_code |= report(check_coverage(chunks, text), f"{source}, {role} units")
+    return exit_code
 
 
 if __name__ == "__main__":

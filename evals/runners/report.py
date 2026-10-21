@@ -50,13 +50,28 @@ def render_markdown(report: RunReport) -> str:
     add("## Retrieval")
     add("")
     add(
-        f"| Recall@{report.profile.top_k} | Hit rate@{report.profile.top_k} | MRR | "
-        "Context precision |"
+        f"| Recall@{report.profile.top_k} | **Context recall** | Hit rate@{report.profile.top_k} "
+        "| MRR | Context precision |"
     )
-    add("|---|---|---|---|")
+    add("|---|---|---|---|---|")
     add(
-        f"| {_pct(report.retrieval.recall_at_k)} | {_pct(report.retrieval.hit_rate_at_k)} | "
+        f"| {_pct(report.retrieval.recall_at_k)} | **{_pct(report.retrieval.context_recall)}** | "
+        f"{_pct(report.retrieval.hit_rate_at_k)} | "
         f"{report.retrieval.mrr:.3f} | {_pct(report.retrieval.context_precision)} |"
+    )
+    add("")
+    add(
+        f"The generator received **{report.retrieval.mean_context_units:.1f} passages per row** "
+        f"on average, from {report.profile.top_k} retrieved chunks."
+    )
+    add("")
+    add(
+        "**Context recall is the number to compare across chunking schemes.** Recall@k is "
+        "measured on the retrieved units, so it moves with their size: halve the chunk and the "
+        "same retriever returns less text under the same k, which reads as a regression and is "
+        "partly an artefact. Context recall is measured on the passages actually sent to the "
+        "model after parent expansion — the text the answer depends on — and means the same "
+        "thing whether the index is flat or parent-child."
     )
     add("")
     add(

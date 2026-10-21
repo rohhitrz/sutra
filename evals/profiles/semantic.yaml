@@ -1,0 +1,27 @@
+# Phase 3 step 1 — semantic chunking + parent-child, read against naive.yaml.
+#
+# Two changes from the baseline, deliberately made together because neither is measurable
+# alone: the index is cut on meaning rather than typography, and search runs over small
+# children while the model reads their parents. Parent-child without expansion is just a
+# smaller chunk size, and expansion without parents is a no-op.
+#
+# Built with:
+#   python -m sutra.ingestion.run --index-version 2 --parent-child --strategy semantic
+#
+# Read `context_recall`, not `recall@k`, when comparing this to naive. Recall is measured on
+# the retrieved units, and this index's units are 200 tokens against the baseline's 400 — so
+# the same retriever fetches less text under the same k whatever its quality. context_recall
+# is measured on what the generator actually received, and is comparable across both.
+name: semantic
+description: Semantic chunking, parent-child retrieval with expansion to parents, answer.v1.
+
+# Retrieval
+top_k: 5
+index_version: 2
+expand_to_parent: true
+
+# Generation
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

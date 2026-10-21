@@ -286,3 +286,55 @@ def test_baseline_alone_is_allowed_through_the_guard(monkeypatch):
     monkeypatch.setattr(run_cli.Profile, "load", staticmethod(_boom))
     with pytest.raises(RuntimeError, match="reached profile loading"):
         run_cli.main()
+
+
+# ---------------------------------------------------------------------------
+# context recall — the metric that survives a change of chunking scheme
+# ---------------------------------------------------------------------------
+
+
+def test_context_recall_defaults_to_recall_when_there_is_no_expansion():
+    """A flat index hands the retrieved chunks straight to the model, so the two numbers are
+    the same thing. This is what makes the Phase 2 baseline comparable without re-running it."""
+    evidence = [EvidenceRef(doc_slug="d", quote="the ninth stone")]
+    retrieved = [RetrievedRef(doc_slug="d", text="crossed at the ninth stone and went south")]
+    scored = score_row(evidence, retrieved)
+
+    assert scored.recall == 1.0
+    assert scored.context_recall == scored.recall
+    assert scored.context_units == 1
+
+
+def test_context_recall_credits_evidence_the_parent_restored():
+    """The case parent-child exists for: the child that was retrieved does not contain the
+    quote, but the parent it expanded to does. Recall says the retriever missed; context
+    recall says the model got it anyway, and the answer depends on the second."""
+    evidence = [EvidenceRef(doc_slug="d", quote="forty-one thousand people")]
+    retrieved = [RetrievedRef(doc_slug="d", text="Halvern Reach held")]
+    context = [RetrievedRef(doc_slug="d", text="Halvern Reach held forty-one thousand people")]
+    scored = score_row(evidence, retrieved, context)
+
+    assert scored.recall == 0.0
+    assert scored.context_recall == 1.0
+
+
+def test_context_recall_does_not_invent_evidence():
+    """Expansion can only add the text around a child. Evidence in neither must stay missing."""
+    evidence = [EvidenceRef(doc_slug="d", quote="a fact in no passage")]
+    retrieved = [RetrievedRef(doc_slug="d", text="something else")]
+    context = [RetrievedRef(doc_slug="d", text="something else, at greater length")]
+    scored = score_row(evidence, retrieved, context)
+
+    assert scored.recall == 0.0
+    assert scored.context_recall == 0.0
+
+
+def test_summary_reports_mean_context_units():
+    """Below k after dedupe: several children of one parent collapse to one passage."""
+    evidence = [EvidenceRef(doc_slug="d", quote="x")]
+    retrieved = [RetrievedRef(doc_slug="d", text="x"), RetrievedRef(doc_slug="d", text="y")]
+    context = [RetrievedRef(doc_slug="d", text="x and y together")]
+    summary = summarise([score_row(evidence, retrieved, context)], k=2)
+
+    assert summary.mean_context_units == 1.0
+    assert summary.context_recall == 1.0

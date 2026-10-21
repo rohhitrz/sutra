@@ -47,6 +47,7 @@ from sutra.ingestion.fingerprint import build_fingerprint
 from sutra.ingestion.parse import parse_corpus
 from sutra.llm.client import LLMClient
 from sutra.prompts import PromptLoader
+from sutra.retrieval.expand import expand_to_parents
 from sutra.retrieval.search import vector_search
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ class Profile(BaseModel):
     description: str = ""
     top_k: int = 5
     index_version: int = 1
+    # Swap retrieved children for their parents before generating (ARCHITECTURE §4 step 6).
+    expand_to_parent: bool = False
     prompt_version_answer: str = "v1"
     judges: list[JudgeName] = Field(default_factory=lambda: list(JUDGE_NAMES))
     concurrency: int = 4
@@ -85,6 +88,7 @@ class Profile(BaseModel):
             update={
                 "retrieval_top_k": self.top_k,
                 "index_version": self.index_version,
+                "retrieval_expand_to_parent": self.expand_to_parent,
                 "prompt_version_answer": self.prompt_version_answer,
             }
         )
@@ -101,6 +105,10 @@ class RowResult(BaseModel):
 
     retrieval: RowRetrievalMetrics
     retrieved: list[str] = Field(default_factory=list)
+    # What the generator was actually handed: the same chunks on a flat index, their
+    # deduped parents on a parent-child one. Recorded because it is the difference
+    # between `recall` and `context_recall`, and a reader will want to see it.
+    context_passages: list[str] = Field(default_factory=list)
 
     answer: str
     reference: str
@@ -257,11 +265,18 @@ async def _run_row(
                 settings=settings,
                 embedder=embedder,
             )
+            # Expansion needs the session, so it happens inside it — but still before the
+            # model call, because no DB connection is held across generation.
+            passages = (
+                await expand_to_parents(chunks, session=db)
+                if settings.retrieval_expand_to_parent
+                else list(chunks)
+            )
 
         answer = await generate_answer(
-            row.question, chunks, client=client, loader=loader, settings=settings
+            row.question, passages, client=client, loader=loader, settings=settings
         )
-        context = format_context(chunks)
+        context = format_context(passages)
 
         judges = await run_judges(
             question=row.question,
@@ -282,8 +297,10 @@ async def _run_row(
             retrieval=score_row(
                 _evidence_for(row),
                 [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in chunks],
+                [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in passages],
             ),
             retrieved=[f"{c.doc_slug}#{c.chunk_no}" for c in chunks],
+            context_passages=[f"{c.doc_slug}#{c.chunk_no}" for c in passages],
             answer=answer.answer,
             reference=row.answer,
             refused=answer.refused,
@@ -328,19 +345,26 @@ async def assert_coverage(profile: Profile) -> None:
     attribute a chunker defect to the retriever. Better to stop than to publish that.
     """
     settings = get_settings()
-    chunks = await chunks_from_db(settings, profile.index_version)
-    if not chunks:
+    roles = await chunks_from_db(settings, profile.index_version)
+    if not any(roles.values()):
         msg = f"index slot {profile.index_version} is empty — run `make ingest` first"
         raise SystemExit(msg)
-    uncovered = [c for c in check_coverage(chunks, corpus_text()) if not c.covered]
-    if uncovered:
-        detail = ", ".join(f"{c.row_id}/{c.doc_slug}" for c in uncovered[:5])
-        msg = (
-            f"{len(uncovered)} cited quote(s) are unreachable in index slot "
-            f"{profile.index_version} ({detail}). Every recall number would understate. "
-            "Run `make coverage` for the diagnosis."
-        )
-        raise SystemExit(msg)
+
+    # Each role is checked separately. In a parent-child index the parent contains all of its
+    # children's text, so a pooled check passes whenever a quote survives anywhere — including
+    # when it was split across children and only the parent holds it whole. Recall is measured
+    # on children, so that pooled pass would hide exactly the defect this guard is for.
+    text = corpus_text()
+    for role, chunks in roles.items():
+        uncovered = [c for c in check_coverage(chunks, text) if not c.covered]
+        if uncovered:
+            detail = ", ".join(f"{c.row_id}/{c.doc_slug}" for c in uncovered[:5])
+            msg = (
+                f"{len(uncovered)} cited quote(s) are unreachable among the {role} units of "
+                f"index slot {profile.index_version} ({detail}). Every recall number would "
+                "understate. Run `make coverage` for the diagnosis."
+            )
+            raise SystemExit(msg)
 
 
 async def run(

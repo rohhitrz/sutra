@@ -67,6 +67,11 @@ class RowRetrievalMetrics(BaseModel):
     first_relevant_rank: int | None
     relevant_chunks: int
 
+    # How many passages the generator actually received, after parent expansion and dedupe.
+    # Equal to `k` for a flat index.
+    context_units: int = 0
+    evidence_found_in_context: int = 0
+
     @property
     def recall(self) -> float:
         """Of the evidence this question needs, the fraction retrieved.
@@ -77,6 +82,25 @@ class RowRetrievalMetrics(BaseModel):
         if self.evidence_total == 0:
             return 1.0
         return self.evidence_found / self.evidence_total
+
+    @property
+    def context_recall(self) -> float:
+        """Of the evidence this question needs, the fraction that reached the *generator*.
+
+        # CONCEPT: The number that survives a change of chunking scheme. `recall` is measured on
+        # the retrieved search units, so its value depends on how big those units are: halve the
+        # chunk size and the same retriever fetches less text under the same k, which looks like
+        # a regression and is partly an artefact. This is measured on the passages actually sent
+        # to the model after parent expansion, which is the thing the answer depends on and the
+        # only retrieval number comparable between a flat index and a parent-child one.
+        #
+        # Read the pair together. `recall` says how well the retriever ranked; this says how
+        # much evidence the model got to work with. A scheme can lose the first and win the
+        # second, and that is exactly what parent-child is supposed to do.
+        """
+        if self.evidence_total == 0:
+            return 1.0
+        return self.evidence_found_in_context / self.evidence_total
 
     @property
     def hit(self) -> bool:
@@ -107,13 +131,19 @@ class RowRetrievalMetrics(BaseModel):
 
 
 def score_row(
-    evidence: Sequence[EvidenceRef], retrieved: Sequence[RetrievedRef]
+    evidence: Sequence[EvidenceRef],
+    retrieved: Sequence[RetrievedRef],
+    context: Sequence[RetrievedRef] | None = None,
 ) -> RowRetrievalMetrics:
     """Score one question's retrieval against its cited evidence.
 
-    `retrieved` must be in rank order, best first.
+    `retrieved` must be in rank order, best first. `context` is what the generator was actually
+    given — the same chunks for a flat index, their parents for a parent-child one. It defaults
+    to `retrieved`, so a caller that has no expansion step needs to know nothing about this.
     """
+    context = retrieved if context is None else context
     found = sum(1 for ref in evidence if any(contains_evidence(c, ref) for c in retrieved))
+    found_in_context = sum(1 for ref in evidence if any(contains_evidence(c, ref) for c in context))
     relevant_positions = [
         position
         for position, chunk in enumerate(retrieved, start=1)
@@ -125,6 +155,8 @@ def score_row(
         evidence_found=found,
         first_relevant_rank=relevant_positions[0] if relevant_positions else None,
         relevant_chunks=len(relevant_positions),
+        context_units=len(context),
+        evidence_found_in_context=found_in_context,
     )
 
 
@@ -137,6 +169,10 @@ class RetrievalSummary(BaseModel):
     hit_rate_at_k: float
     mrr: float
     context_precision: float
+    # The chunking-scheme-independent number. See `RowRetrievalMetrics.context_recall`.
+    context_recall: float = 0.0
+    # Mean passages sent to the generator per row. Below k when parent expansion deduped.
+    mean_context_units: float = 0.0
 
 
 def summarise(rows: Sequence[RowRetrievalMetrics], *, k: int) -> RetrievalSummary:
@@ -158,4 +194,6 @@ def summarise(rows: Sequence[RowRetrievalMetrics], *, k: int) -> RetrievalSummar
         hit_rate_at_k=sum(1 for r in rows if r.hit) / count,
         mrr=sum(r.reciprocal_rank for r in rows) / count,
         context_precision=sum(r.context_precision for r in rows) / count,
+        context_recall=sum(r.context_recall for r in rows) / count,
+        mean_context_units=sum(r.context_units for r in rows) / count,
     )
