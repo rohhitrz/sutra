@@ -24,6 +24,9 @@ revision:  ## create a new migration: make revision M="add foo"
 ingest:  ## ingest data/corpus into Postgres
 	uv run python -m sutra.ingestion.run
 
+cache:  ## probe the semantic cache for wrong hits and leaks
+	uv run python -m evals.check_cache
+
 judges:  ## grade the faithfulness judge against the hand-labelled rows
 	uv run python -m evals.validate_judges
 

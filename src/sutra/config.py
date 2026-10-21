@@ -253,6 +253,11 @@ class Settings(BaseSettings):
     model_cache_dir: str = "./.models_cache"
 
     # ---- Semantic cache (ADR-012) ----
+    # # CONCEPT: Every cache hit trusts a similarity score as a judgement about meaning, with
+    # # no model in the loop to catch it. 0.95 is deliberately high: two questions differing
+    # # only in a year are far closer than that, and serving the wrong year is worse than
+    # # paying for the answer twice.
+    semantic_cache_enabled: bool = False
     cache_similarity_threshold: float = 0.95
     cache_ttl_hours: int = 168
 
