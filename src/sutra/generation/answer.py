@@ -42,7 +42,12 @@ USER_DELIMITER = "<<<USER>>>"
 # body that a schema-constrained call reports as invalid JSON. The judges hit exactly that during
 # the first full eval run. Phase 5 replaces this with a real token budget (ARCHITECTURE §5) that
 # trims context to fit the model window.
-MAX_ANSWER_TOKENS = 2000
+#
+# Raised 2000 -> 4000 in Phase 3 step 1. Larger context passages make the model reason longer,
+# and at 2000 a row occasionally spent the entire budget on reasoning and returned a truncated
+# body — stochastically, so the same configuration passed one run and failed the next. The cap
+# has to clear the worst case, not the median, or the harness fails at random.
+MAX_ANSWER_TOKENS = 4000
 
 
 def format_context(chunks: Sequence[RetrievedChunk]) -> str:

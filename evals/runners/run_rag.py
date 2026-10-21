@@ -117,6 +117,10 @@ class RowResult(BaseModel):
     citations: list[int] = Field(default_factory=list)
     dropped_citations: list[int] = Field(default_factory=list)
     short_circuited: bool = False
+    # Set when the answer call itself failed. The row keeps its retrieval metrics — those were
+    # computed before the model was involved — and is excluded from the judge and refusal
+    # figures, because a provider fault says nothing about the answer that was never produced.
+    error: str | None = None
 
     judges: JudgeScores = Field(default_factory=JudgeScores)
     # The deterministic cross-check on the judge: figures asserted but absent from the context.
@@ -208,6 +212,10 @@ class RunReport(BaseModel):
 
     # Mechanical grounding, reported beside the faithfulness judge rather than folded into it,
     # because the two disagreeing is the single most informative thing in a report.
+    # Rows whose answer call failed outright. Surfaced at the top of the report rather than
+    # buried: a run with failures is not comparable to one without, and the reader has to see
+    # that before reading anything else.
+    failed_rows: int = 0
     rows_with_unsupported_figures: int
     # The subset that also failed to retrieve its evidence — the figures that are not merely
     # absent but unaccountable.
@@ -273,9 +281,36 @@ async def _run_row(
                 else list(chunks)
             )
 
-        answer = await generate_answer(
-            row.question, passages, client=client, loader=loader, settings=settings
-        )
+        # A provider failure on one row must not destroy a 42-row run. The judges already
+        # degrade this way (`JudgeResult.error`); the answer call did not, so a single
+        # stochastic truncation threw away every other row's work and the money spent on it.
+        # The row is recorded with `error` set and excluded from the metrics rather than
+        # scored zero — a provider fault is not evidence about retrieval or about the model.
+        try:
+            answer = await generate_answer(
+                row.question, passages, client=client, loader=loader, settings=settings
+            )
+        except Exception as exc:
+            logger.warning("row %s failed: %s", row.id, exc)
+            return RowResult(
+                id=row.id,
+                question=row.question,
+                category=row.category,
+                must_refuse=row.must_refuse,
+                retrieval=score_row(
+                    _evidence_for(row),
+                    [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in chunks],
+                    [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in passages],
+                ),
+                retrieved=[f"{c.doc_slug}#{c.chunk_no}" for c in chunks],
+                context_passages=[f"{c.doc_slug}#{c.chunk_no}" for c in passages],
+                answer="",
+                reference=row.answer,
+                refused=False,
+                confidence=0.0,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
         context = format_context(passages)
 
         judges = await run_judges(
@@ -407,8 +442,12 @@ async def run(
 
     fingerprint = build_fingerprint(settings, parse_corpus(CORPUS_DIR))
     latencies = sorted(r.latency_ms for r in rows) or [0.0]
-    unanswerable = [r for r in rows if r.must_refuse]
-    answerable = [r for r in rows if not r.must_refuse]
+    # A row whose answer call failed produced no answer to judge. Counting it as "did not
+    # refuse" would charge a provider fault to the model's refusal behaviour, which is the
+    # same mistake as scoring a failed judge call zero instead of dropping it.
+    scored = [r for r in rows if not r.error]
+    unanswerable = [r for r in scored if r.must_refuse]
+    answerable = [r for r in scored if not r.must_refuse]
 
     return RunReport(
         profile=profile,
@@ -437,6 +476,7 @@ async def run(
             falsely_refused=sum(1 for r in answerable if r.refused),
         ),
         by_category=_by_category(list(rows)),
+        failed_rows=sum(1 for r in rows if r.error),
         rows_with_unsupported_figures=sum(1 for r in rows if not r.grounding.grounded),
         rows_with_unverifiable_figures=sum(1 for r in rows if r.has_unverifiable_figure),
         figure_support_rate=(

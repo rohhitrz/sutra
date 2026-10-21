@@ -47,6 +47,14 @@ def render_markdown(report: RunReport) -> str:
     add(f"| prompt versions | {', '.join(f'{k}={v}' for k, v in report.prompt_versions.items())} |")
     add("")
 
+    if report.failed_rows:
+        add(
+            f"> **{report.failed_rows} of {len(report.rows)} rows failed their answer call** "
+            "and are excluded from the judge and refusal figures below. This run is not "
+            "directly comparable to one with no failures."
+        )
+        add("")
+
     add("## Retrieval")
     add("")
     add(
