@@ -217,7 +217,14 @@ async def run_judge(
     try:
         messages = split_prompt(prompt, **variables)
         response = await client.structured(
-            messages, schema, role="strong", max_output_tokens=MAX_JUDGE_TOKENS
+            messages,
+            schema,
+            role="strong",
+            max_output_tokens=MAX_JUDGE_TOKENS,
+            # Named so a row's three judges are distinguishable in the trace instead of
+            # arriving as three spans all called `llm.call`.
+            stage=f"judge_{name}",
+            prompt_version=prompt.qualified_version,
         )
         verdict = response.parsed
         if not isinstance(verdict, schema):

@@ -46,6 +46,8 @@ from sutra.ingestion.embed import get_embedder
 from sutra.ingestion.fingerprint import IndexFingerprint
 from sutra.ingestion.run import read_slot_fingerprint
 from sutra.llm.client import LLMClient
+from sutra.observability.context import request_context
+from sutra.observability.tracing import build_tracer, current_trace_id, get_tracer, set_tracer
 from sutra.prompts import PromptLoader
 from sutra.retrieval.expand import expand_to_parents
 from sutra.retrieval.search import search
@@ -302,72 +304,88 @@ async def _run_row(
     loader: PromptLoader,
     embedder: Any,
     semaphore: asyncio.Semaphore,
+    run_id: str,
 ) -> RowResult:
     async with semaphore:
-        factory = get_sessionmaker()
-        async with factory() as db:
-            chunks = await search(
-                row.question,
-                session=db,
-                k=profile.top_k,
-                index_version=profile.index_version,
+        # # CONCEPT: One trace per eval row, all sharing a Langfuse `session_id` — the run id.
+        # # Without it a 42-row run arrives as 42 unrelated traces and the UI cannot answer
+        # # "show me this run", which is the only question you ask of an eval's traces. The
+        # # tags make the comparison that matters addressable: two runs of the same profile
+        # # against different index slots are told apart by `slot:`, not by timestamp.
+        # #
+        # # This is also where the eval harness starts being able to explain itself. Phase 3
+        # # left two results unexplained — temporal lost 28.6pp at step 4 and never recovered —
+        # # and those are per-stage retrieval questions that a row's span tree answers
+        # # directly, which no aggregate in the report could.
+        tracer = get_tracer()
+        with (
+            tracer.request(
+                name="eval.row",
+                user_id=f"eval:{profile.name}",
+                session_id=run_id,
+                input={"question": row.question},
+                tags=["eval", f"profile:{profile.name}", f"slot:{profile.index_version}"],
+                metadata={
+                    "row_id": row.id,
+                    "category": row.category,
+                    "must_refuse": row.must_refuse,
+                    "run_id": run_id,
+                },
+            ),
+            request_context(trace_id=current_trace_id(), row_id=row.id),
+        ):
+            return await _run_row_inner(
+                row,
+                profile=profile,
                 settings=settings,
-                embedder=embedder,
-                # The runner's own client, so 42 rows share one connection pool instead of
-                # opening one per model-backed retrieval stage per row.
                 client=client,
-            )
-            # Expansion needs the session, so it happens inside it — but still before the
-            # model call, because no DB connection is held across generation.
-            passages = (
-                await expand_to_parents(chunks, session=db)
-                if settings.retrieval_expand_to_parent
-                else list(chunks)
+                loader=loader,
+                embedder=embedder,
             )
 
-        # A provider failure on one row must not destroy a 42-row run. The judges already
-        # degrade this way (`JudgeResult.error`); the answer call did not, so a single
-        # stochastic truncation threw away every other row's work and the money spent on it.
-        # The row is recorded with `error` set and excluded from the metrics rather than
-        # scored zero — a provider fault is not evidence about retrieval or about the model.
-        try:
-            answer = await generate_answer(
-                row.question, passages, client=client, loader=loader, settings=settings
-            )
-        except Exception as exc:
-            logger.warning("row %s failed: %s", row.id, exc)
-            return RowResult(
-                id=row.id,
-                question=row.question,
-                category=row.category,
-                must_refuse=row.must_refuse,
-                retrieval=score_row(
-                    _evidence_for(row),
-                    [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in chunks],
-                    [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in passages],
-                ),
-                retrieved=[f"{c.doc_slug}#{c.chunk_no}" for c in chunks],
-                context_passages=[f"{c.doc_slug}#{c.chunk_no}" for c in passages],
-                answer="",
-                reference=row.answer,
-                refused=False,
-                confidence=0.0,
-                error=f"{type(exc).__name__}: {exc}",
-            )
 
-        context = format_context(passages)
-
-        judges = await run_judges(
-            question=row.question,
-            answer=answer.answer,
-            context=context,
-            reference=row.answer,
-            names=profile.judges,
-            client=client,
-            loader=loader,
+async def _run_row_inner(
+    row: GoldenRow,
+    *,
+    profile: Profile,
+    settings: Settings,
+    client: LLMClient,
+    loader: PromptLoader,
+    embedder: Any,
+) -> RowResult:
+    """One row, inside an open root span. The semaphore is held by the caller."""
+    factory = get_sessionmaker()
+    async with factory() as db:
+        chunks = await search(
+            row.question,
+            session=db,
+            k=profile.top_k,
+            index_version=profile.index_version,
             settings=settings,
+            embedder=embedder,
+            # The runner's own client, so 42 rows share one connection pool instead of
+            # opening one per model-backed retrieval stage per row.
+            client=client,
+        )
+        # Expansion needs the session, so it happens inside it — but still before the
+        # model call, because no DB connection is held across generation.
+        passages = (
+            await expand_to_parents(chunks, session=db)
+            if settings.retrieval_expand_to_parent
+            else list(chunks)
         )
 
+    # A provider failure on one row must not destroy a 42-row run. The judges already
+    # degrade this way (`JudgeResult.error`); the answer call did not, so a single
+    # stochastic truncation threw away every other row's work and the money spent on it.
+    # The row is recorded with `error` set and excluded from the metrics rather than
+    # scored zero — a provider fault is not evidence about retrieval or about the model.
+    try:
+        answer = await generate_answer(
+            row.question, passages, client=client, loader=loader, settings=settings
+        )
+    except Exception as exc:
+        logger.warning("row %s failed: %s", row.id, exc)
         return RowResult(
             id=row.id,
             question=row.question,
@@ -380,21 +398,53 @@ async def _run_row(
             ),
             retrieved=[f"{c.doc_slug}#{c.chunk_no}" for c in chunks],
             context_passages=[f"{c.doc_slug}#{c.chunk_no}" for c in passages],
-            answer=answer.answer,
+            answer="",
             reference=row.answer,
-            refused=answer.refused,
-            confidence=answer.confidence,
-            citations=[c.label for c in answer.citations],
-            dropped_citations=answer.dropped_citations,
-            short_circuited=answer.short_circuited,
-            judges=judges,
-            grounding=check_figures(answer.answer, context),
-            answer_input_tokens=answer.usage.input_tokens,
-            answer_output_tokens=answer.usage.output_tokens,
-            answer_cached_tokens=answer.usage.cached_tokens,
-            latency_ms=answer.latency_ms,
-            cost_usd=(answer.usage.cost_usd or 0.0) + judges.cost_usd,
+            refused=False,
+            confidence=0.0,
+            error=f"{type(exc).__name__}: {exc}",
         )
+
+    context = format_context(passages)
+
+    judges = await run_judges(
+        question=row.question,
+        answer=answer.answer,
+        context=context,
+        reference=row.answer,
+        names=profile.judges,
+        client=client,
+        loader=loader,
+        settings=settings,
+    )
+
+    return RowResult(
+        id=row.id,
+        question=row.question,
+        category=row.category,
+        must_refuse=row.must_refuse,
+        retrieval=score_row(
+            _evidence_for(row),
+            [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in chunks],
+            [RetrievedRef(doc_slug=c.doc_slug, text=c.text) for c in passages],
+        ),
+        retrieved=[f"{c.doc_slug}#{c.chunk_no}" for c in chunks],
+        context_passages=[f"{c.doc_slug}#{c.chunk_no}" for c in passages],
+        answer=answer.answer,
+        reference=row.answer,
+        refused=answer.refused,
+        confidence=answer.confidence,
+        citations=[c.label for c in answer.citations],
+        dropped_citations=answer.dropped_citations,
+        short_circuited=answer.short_circuited,
+        judges=judges,
+        grounding=check_figures(answer.answer, context),
+        answer_input_tokens=answer.usage.input_tokens,
+        answer_output_tokens=answer.usage.output_tokens,
+        answer_cached_tokens=answer.usage.cached_tokens,
+        latency_ms=answer.latency_ms,
+        cost_usd=(answer.usage.cost_usd or 0.0) + judges.cost_usd,
+    )
 
 
 def _by_category(rows: list[RowResult]) -> list[CategorySummary]:
@@ -485,27 +535,50 @@ async def run(
     if limit is not None:
         golden = golden[:limit]
 
+    # The tracer is built from the profile's settings and installed before any client, so
+    # the runner's own `LLMClient` picks it up as its default.
+    tracer = build_tracer(settings)
+    set_tracer(tracer)
+
     client = LLMClient(settings)
     loader = PromptLoader(settings=settings)
     embedder = get_embedder(settings)
     semaphore = asyncio.Semaphore(profile.concurrency)
 
     started = dt.datetime.now(dt.UTC)
-    logger.info("eval start profile=%s rows=%d k=%d", profile.name, len(golden), profile.top_k)
-    rows = await asyncio.gather(
-        *(
-            _run_row(
-                row,
-                profile=profile,
-                settings=settings,
-                client=client,
-                loader=loader,
-                embedder=embedder,
-                semaphore=semaphore,
-            )
-            for row in golden
-        )
+    # Readable rather than a bare uuid, because this is what you type into Langfuse's session
+    # filter to pull a run back up weeks later.
+    run_id = f"{profile.name}-{started:%Y%m%d-%H%M%S}"
+    logger.info(
+        "eval start",
+        extra={
+            "profile": profile.name,
+            "rows": len(golden),
+            "k": profile.top_k,
+            "slot": profile.index_version,
+            "run_id": run_id,
+        },
     )
+    try:
+        rows = await asyncio.gather(
+            *(
+                _run_row(
+                    row,
+                    profile=profile,
+                    settings=settings,
+                    client=client,
+                    loader=loader,
+                    embedder=embedder,
+                    semaphore=semaphore,
+                    run_id=run_id,
+                )
+                for row in golden
+            )
+        )
+    finally:
+        # The exporter batches, so without this the last rows' spans are dropped when the
+        # process exits — and an eval run is exactly the case where you want them all.
+        tracer.shutdown()
     duration = (dt.datetime.now(dt.UTC) - started).total_seconds()
 
     latencies = sorted(r.latency_ms for r in rows) or [0.0]
