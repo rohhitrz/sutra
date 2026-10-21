@@ -331,10 +331,10 @@ async def _run_row(
                     "must_refuse": row.must_refuse,
                     "run_id": run_id,
                 },
-            ),
+            ) as root_span,
             request_context(trace_id=current_trace_id(), row_id=row.id),
         ):
-            return await _run_row_inner(
+            result = await _run_row_inner(
                 row,
                 profile=profile,
                 settings=settings,
@@ -342,6 +342,21 @@ async def _run_row(
                 loader=loader,
                 embedder=embedder,
             )
+            # The root span was the one observation in a row's tree with nothing on its
+            # output side, so a trace list showed 42 rows and not one of their answers. The
+            # scores go on with it: a reader scanning the run for the rows that went wrong
+            # should not have to open each one to find out which those are.
+            root_span.update(
+                output={
+                    "answer": result.answer,
+                    "refused": result.refused,
+                    "recall": result.retrieval.recall,
+                    "context_recall": result.retrieval.context_recall,
+                    "judges": {name: result.judges.score(name) for name in profile.judges},
+                    "error": result.error,
+                }
+            )
+            return result
 
 
 async def _run_row_inner(
