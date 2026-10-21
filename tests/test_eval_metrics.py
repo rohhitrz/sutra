@@ -10,7 +10,14 @@ import sys
 
 import pytest
 from evals.metrics.grounding import check_figures
-from evals.metrics.judges import JudgeResult, JudgeScores, summarise_judges
+from evals.metrics.judges import (
+    ClaimCheck,
+    FaithfulnessVerdict,
+    JudgeResult,
+    JudgeScores,
+    summarise_judges,
+    verify_spans,
+)
 from evals.metrics.retrieval import (
     EvidenceRef,
     RetrievedRef,
@@ -349,3 +356,69 @@ def test_a_figure_ending_a_clause_is_still_supported():
     assert check_figures("He paid 2,750.", "the total came to 2,750, as recorded").grounded
     # And the strictness it must not lose.
     assert check_figures("It was 143.", "Frostmark of 1143, and after").unsupported == ["143"]
+
+
+# ---------------------------------------------------------------------------
+# judge span verification (faithfulness v2)
+# ---------------------------------------------------------------------------
+
+
+def _verdict(*claims: tuple[str, bool, str]) -> FaithfulnessVerdict:
+    return FaithfulnessVerdict(
+        claims=[ClaimCheck(claim=c, supported=s, quote=q) for c, s, q in claims],
+        score=1.0,
+        reason="",
+    )
+
+
+CONTEXT = (
+    "[1] places · Places\n- **Population:** 41,000\n- **Government:** the Harbour\n  Syndicate"
+)
+
+
+def test_a_real_span_verifies():
+    verified, fabricated, unquoted = verify_spans(
+        _verdict(("population is 41,000", True, "**Population:** 41,000")), CONTEXT
+    )
+    assert (verified, fabricated, unquoted) == (1, [], 0)
+
+
+def test_a_span_that_is_not_in_the_passages_is_fabricated():
+    """The failure v1 could not expose: a confident verdict justified by invented evidence.
+    It says nothing about whether the answer was faithful — it says the verdict is worthless."""
+    verified, fabricated, _ = verify_spans(
+        _verdict(("population is 68,000", True, "**Population:** 68,000")), CONTEXT
+    )
+    assert verified == 0
+    assert fabricated == ["**Population:** 68,000"]
+
+
+def test_a_quote_broken_across_a_source_line_still_verifies():
+    """The corpus is hard-wrapped, so a correct quote carries the newline where the line broke."""
+    verified, _, _ = verify_spans(
+        _verdict(("the Syndicate governs", True, "the Harbour Syndicate")), CONTEXT
+    )
+    assert verified == 1
+
+
+def test_markdown_emphasis_is_not_a_fabrication():
+    """Regression: the first run of this check flagged `Population: 2,300 (1143)` against a
+    source reading `- **Population:** 2,300 (1143)`. The judge had quoted the content and
+    dropped the asterisks, which is a correct quotation and was reported as invented
+    evidence — an over-sensitive detector of dishonesty is its own kind of dishonest."""
+    verified, fabricated, _ = verify_spans(
+        _verdict(("population is 41,000", True, "Population: 41,000")), CONTEXT
+    )
+    assert (verified, fabricated) == (1, [])
+
+
+def test_an_unsupported_claim_needs_no_quote():
+    verified, fabricated, unquoted = verify_spans(_verdict(("founded in 1052", False, "")), CONTEXT)
+    assert (verified, fabricated, unquoted) == (0, [], 0)
+
+
+def test_a_supported_claim_with_no_quote_is_unquoted_not_fabricated():
+    """Two different failures: not following the protocol, and inventing evidence. Folding
+    them together reported an empty string on a refusal row as a fabricated span."""
+    verified, fabricated, unquoted = verify_spans(_verdict(("something", True, "   ")), CONTEXT)
+    assert (verified, fabricated, unquoted) == (0, [], 1)

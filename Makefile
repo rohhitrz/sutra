@@ -24,6 +24,9 @@ revision:  ## create a new migration: make revision M="add foo"
 ingest:  ## ingest data/corpus into Postgres
 	uv run python -m sutra.ingestion.run
 
+judges:  ## grade the faithfulness judge against the hand-labelled rows
+	uv run python -m evals.validate_judges
+
 eval:  ## run the eval suite, write a report to evals/reports/
 	uv run python -m evals.runners.run
 

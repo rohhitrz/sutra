@@ -135,7 +135,11 @@ class Settings(BaseSettings):
     # The judges are versioned prompts like any other, and the version used is recorded in every
     # eval report — a judge rubric edit changes the scores, so a report that did not name its
     # judge version would not be comparable to the next one.
-    prompt_version_judge_faithfulness: str = "v1"
+    # v2 from Phase 3. Adopted for *auditability*, not accuracy: it agrees with the
+    # hand-labelled rows exactly as often as v1 (9/10 both), but it must quote the span
+    # supporting each claim, and `verify_spans` checks those quotes against the passages. A
+    # v1 score was unfalsifiable; a v2 score comes with evidence the harness can check.
+    prompt_version_judge_faithfulness: str = "v2"
     prompt_version_judge_relevance: str = "v1"
     prompt_version_judge_correctness: str = "v1"
     prompt_version_context_prefix: str = "v1"

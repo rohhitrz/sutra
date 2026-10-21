@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Sequence
 from typing import Literal
 
@@ -74,9 +75,91 @@ class JudgeResult(BaseModel):
     # cache was, and a cost delta that large looks like a regression until you can see why.
     cached_tokens: int = 0
     cost_usd: float = 0.0
+    # Span verification, faithfulness v2 only. `claims_total` is how many claims the judge
+    # found; `spans_verified` how many of its supporting quotes really appear in the passages;
+    # `fabricated_spans` the ones that do not. A judge inventing its own evidence is the
+    # failure v1 could not expose, so it is recorded per row rather than aggregated away.
+    claims_total: int = 0
+    spans_verified: int = 0
+    fabricated_spans: list[str] = Field(default_factory=list)
+    # Supported claims the judge gave no span for. A protocol lapse, not invented evidence.
+    unquoted_claims: int = 0
     # Set when the judge call failed. The row is then excluded from that judge's average rather
     # than scored 0, because a provider error is not evidence about the answer.
     error: str | None = None
+
+
+class ClaimCheck(BaseModel):
+    """One factual claim the judge extracted, and the span it says supports it."""
+
+    claim: str
+    supported: bool
+    # Verbatim span copied from the passages. Empty when the judge says it is unsupported.
+    quote: str = ""
+
+
+class FaithfulnessVerdict(BaseModel):
+    """What `judge_faithfulness.v2` returns.
+
+    # CONCEPT: Make the judge show its working, then check the working. v1 returned a score and
+    # a sentence, and the sentence could say anything — it once asserted "the passage states
+    # that Kesh Ithar has 68,000 people" about passages containing neither the figure nor the
+    # word "population". A free-text justification is unfalsifiable; a quoted span is not.
+    # Requiring the quote costs nothing extra to produce and turns the judge's reasoning into
+    # something the harness can verify mechanically.
+    """
+
+    claims: list[ClaimCheck] = Field(default_factory=list)
+    score: float
+    reason: str
+
+
+def verify_spans(verdict: FaithfulnessVerdict, context: str) -> tuple[int, list[str], int]:
+    """Check every claimed supporting quote against the passages.
+
+    Returns (verified, fabricated, unquoted): supported claims whose span really appears, the
+    spans that do not appear, and supported claims that came with no span at all.
+
+    **Unquoted is kept separate from fabricated on purpose.** They are different failures: a
+    missing quote is the judge not following the protocol, while a quote that does not exist
+    is the judge inventing evidence. Folding them together would have reported the first run
+    of this check as "2 fabricated spans" when one was an empty string on a refusal row — and
+    an over-sensitive detector of dishonesty is its own kind of dishonest.
+
+    A genuinely fabricated span is the strongest signal this harness can produce about a
+    judge. It does not mean the answer was unfaithful; it means the judge's *stated reason*
+    for its verdict was invented, which makes that verdict worthless in either direction.
+    """
+    haystack = _normalise(context)
+    fabricated: list[str] = []
+    verified = unquoted = 0
+    for claim in verdict.claims:
+        if not claim.supported:
+            continue
+        quote = _normalise(claim.quote)
+        if not quote:
+            unquoted += 1
+        elif quote in haystack:
+            verified += 1
+        else:
+            fabricated.append(claim.quote.strip())
+    return verified, fabricated, unquoted
+
+
+def _normalise(text: str) -> str:
+    """Collapse whitespace and drop markdown emphasis, for comparing a quote to its source.
+
+    Whitespace because the corpus is hard-wrapped markdown and a correct quote still carries
+    the newline where the source line broke. Emphasis markers because the first run of this
+    check flagged `Population: 2,300 (1143)` as fabricated against a source reading
+    `- **Population:** 2,300 (1143)` — the judge had quoted the text and dropped the
+    asterisks, which is a correct quotation of the content and a false alarm here.
+
+    Nothing else is relaxed. Every further loosening makes a fabricated quote likelier to pass,
+    and this check only earns its place while a failure means something.
+    """
+    stripped = re.sub(r"[*_`]", "", text)
+    return re.sub(r"\s+", " ", stripped).strip()
 
 
 class JudgeScores(BaseModel):
@@ -125,19 +208,42 @@ async def run_judge(
     if name == "correctness":
         variables["reference"] = reference
 
+    # The schema is chosen by the prompt version, not by the judge name: v1 and v2 of
+    # faithfulness ask for different things, and running v2's prompt against v1's schema would
+    # discard the claims silently and leave the span check with nothing to verify.
+    wants_claims = name == "faithfulness" and prompt.version >= "v2"
+    schema: type[BaseModel] = FaithfulnessVerdict if wants_claims else JudgeVerdict
+
     try:
         messages = split_prompt(prompt, **variables)
         response = await client.structured(
-            messages, JudgeVerdict, role="strong", max_output_tokens=MAX_JUDGE_TOKENS
+            messages, schema, role="strong", max_output_tokens=MAX_JUDGE_TOKENS
         )
         verdict = response.parsed
-        if not isinstance(verdict, JudgeVerdict):
+        if not isinstance(verdict, schema):
             msg = f"judge {name} returned {type(verdict).__name__}"
             raise TypeError(msg)
+
+        claims_total = spans_verified = unquoted = 0
+        fabricated: list[str] = []
+        if isinstance(verdict, FaithfulnessVerdict):
+            claims_total = len(verdict.claims)
+            spans_verified, fabricated, unquoted = verify_spans(verdict, context)
+            if fabricated:
+                logger.warning(
+                    "judge faithfulness %s quoted %d span(s) absent from the passages",
+                    prompt.version,
+                    len(fabricated),
+                )
+
         return JudgeResult(
             name=name,
             score=min(max(verdict.score, 0.0), 1.0),
             reason=verdict.reason.strip(),
+            claims_total=claims_total,
+            spans_verified=spans_verified,
+            fabricated_spans=fabricated,
+            unquoted_claims=unquoted,
             prompt_version=prompt.version,
             model=response.model,
             input_tokens=response.usage.input_tokens,

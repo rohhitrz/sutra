@@ -69,3 +69,35 @@ make eval         # the numbers, into evals/reports/
 check a change to the harness itself). `--baseline` also writes `evals/reports/baseline.json`,
 the reference every later run is read against. `--profile hybrid` will select a Phase 3 profile
 from `evals/profiles/`.
+
+## Grading the judge (`make judges`)
+
+An LLM judge is an instrument, and an instrument nobody calibrates is a number generator.
+`evals/datasets/judge_labels.jsonl` holds ten rows (ARCHITECTURE §11), each a
+passages/question/answer triple with a score a human stands behind and the failure mode it
+tests. The passages are verbatim corpus text, and every premise behind a label — "this figure
+is absent from this passage" — is checked mechanically, so a label cannot quietly rot.
+
+| Row | Failure mode | Label |
+|---|---|---|
+| jl-01 | faithful, stated directly | 1.0 |
+| jl-02 | fabricated figure anchored on a real detail | 0.0 |
+| jl-03 | correct arithmetic over quoted ledger rows | 1.0 |
+| jl-04 | true in the world, absent from these passages | 0.0 |
+| jl-05 | correct refusal | 1.0 |
+| jl-06 | refusal when the passages do say | 0.0 |
+| jl-07 | near-miss date | 0.0 |
+| jl-08 | causal link the passages do not make | 0.5 |
+| jl-09 | rounded figure | 0.5 |
+| jl-10 | one supported claim plus one fabrication | 0.0 |
+
+Two numbers come out, answering different questions. **Agreement** is how often the judge lands
+on the labelled score — 9/10 for both v1 and v2, stable over three repeats, with the only
+persistent miss being `jl-03` where both are too *harsh* about ledger arithmetic. **Fabricated
+spans** is how often a v2 judge quotes a passage that does not exist; this is the one v1 cannot
+expose, and it is worse than a wrong score, because a verdict justified by invented evidence is
+worthless in either direction.
+
+`jl-02` reproduces the anecdote this project built its distrust of the judge on. Both versions
+score it correctly. One bad roll on a 42-row run is consistent with a judge that is right nine
+times in ten, which is what the evidence actually shows.

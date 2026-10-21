@@ -34,6 +34,14 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-21 | **step 2** — `contextual`, + generated prefixes, slot 3 | 69.4% | 79.8% | 0.506 | 0.952 | 0.810 | 2529 ms | $0.00086 |
 | 2026-10-21 | ablation — `keyword_only`, FTS alone, slot 3 | 61.9% | 68.3% | 0.471 | 1.000 | 0.774 | 2860 ms | $0.00092 |
 | 2026-10-21 | **step 3** — `hybrid`, vector + FTS fused by RRF, slot 3 | **73.0%** | **81.0%** | **0.528** | 0.964 | 0.810 | 2572 ms | $0.00085 |
+| 2026-10-21 | step 3 re-graded by **judge v2** — same retrieval, new judge | 73.0% | 81.0% | 0.528 | 0.893 | 0.750 | 2612 ms | $0.00096 |
+
+**The faithfulness column changes meaning at the last row.** Rows above it were graded by
+`judge_faithfulness.v1`; from step 4 onward the default is v2, which must quote the span
+supporting each claim. The two are not comparable — v2 reads 0.071 lower on identical
+retrieval — so the bridge row exists to make the size of that shift visible rather than
+letting it look like a regression. Retrieval metrics are unaffected and identical, as they
+must be: the judge does not touch retrieval.
 
 All three rows above were produced by the **same harness code on the same day**, which earlier
 rows were not. That re-run was forced by a bug found in step 2 (the figure check was flagging
@@ -169,6 +177,38 @@ visible because the ablation was run.
    correctly — but the guardrail is the model's judgement rather than an empty result set,
    which is a weaker place for it to live. Worth remembering in Phase 6.
 
+### `judge_faithfulness.v2` and the hand-labelled rows (done before step 4)
+
+Deferred twice on the grounds that steps 1–3 were decided by exact retrieval metrics. Done now
+because step 4 is the first step whose case may rest on answer quality.
+
+**v2 does not score better than v1. It was adopted anyway, and the distinction matters.**
+Agreement with the labels is 9/10 for both, stable over three repeats. What v2 adds is that
+its verdicts can be checked: it decomposes the answer into claims and must copy a verbatim
+supporting span for each one, and `verify_spans` tests those quotes against the passages. A v1
+score was unfalsifiable prose; a v2 score arrives with evidence the harness audits.
+
+On the full 42-row hybrid run v2 extracted **131 claims, verified 114 spans, 0 unquoted, and
+caught 2 quotes that do not appear in the passages** — invisible to v1 by construction. Both
+turned out to be *stitched*, not invented: real text joined non-contiguously, and in `gq-013`
+joined **across two different documents**. That is a weaker failure than fabricating a fact
+and a real one, because a stitched span is exactly how a judge would justify a cross-document
+inference that neither passage makes. Described accurately rather than as "the judge invented
+evidence", which it did not.
+
+Two costs, both stated rather than buried:
+
+- **+36% at list price** on a full run ($0.0378 → $0.0513), from the claim decomposition.
+- **Faithfulness reads 0.071 lower** on identical retrieval (0.964 → 0.893). v2 is stricter in
+  practice despite identical label agreement, so the scoreboard column is discontinuous and
+  the bridge row above marks where.
+
+Building the validation set also found a bug in the validator: the span check initially
+reported two fabricated quotes that were a judge dropping markdown asterisks and an empty
+quote on a refusal row. Both were defects in the checker, now fixed and tested, and the
+distinction between "unquoted" and "fabricated" is kept in the data — an over-sensitive
+detector of dishonesty is its own kind of dishonest.
+
 Weakest categories by recall@5 in the baseline: multi-hop 37.5%, routing 44.4%. Strongest:
 numeric 86.1%.
 Weakest by correctness: routing 0.33, multi-hop 0.62.
@@ -180,11 +220,11 @@ Weakest by correctness: routing 0.33, multi-hop 0.62.
    correctness 0.726 / 0.762 / 0.774 / 0.774 / 0.821. Retrieval metrics are exact and repeat to
    the digit every time. A Phase 3 change that moves a judge score by 0.05 has moved nothing
    measurable; a change that moves recall by 0.02 has.
-2. **The faithfulness judge is demonstrably unreliable in the direction that matters** — see
-   known issue 2. The current run makes this as stark as it gets: the judge returned
-   **faithfulness 1.000 on all 42 rows** while the deterministic figure check flagged
-   **8 of those same rows** as asserting a figure that appears nowhere in their context. Treat
-   1.000 as an upper bound, and specifically as an upper bound that is provably wrong here.
+2. **The faithfulness judge is better than this file has been claiming** — see known issue 2,
+   now rewritten against evidence rather than one anecdote. Measured against ten hand-labelled
+   rows, it agrees **9/10**, including the exact failure shape this file was built around.
+   Faithfulness is still same-family self-evaluation (ADR-017) and still worth less than an
+   exact metric, but it is not the rubber stamp the earlier entries claimed.
 
 3. **Cost per run swings ~50% on prefix-cache warmth alone.** Three runs over the same index
    doing the same work, with input-token counts within 0.1% of each other, cost $0.0212,
@@ -351,28 +391,27 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
    deliberate — but it is a thing you can forget. **Bump it, or use `--force`, after any change
    to chunking behaviour.**
 
-2. **The faithfulness judge cannot be trusted at face value.** ADR-017 points the judge and the
-   answer model at one model, and the consequence is not theoretical: on the baseline it scored
-   **faithfulness 1.00** on an answer whose central figure (`68,000`) appeared in none of its
-   five passages, reasoning that "the passage states that Kesh Ithar has 68,000 people". It had
-   anchored on a date that *was* present and approved the rest. The mechanical figure check
-   (`evals/metrics/grounding.py`) is the deterministic floor under it. **Phase 3 should write
-   `judge_faithfulness.v2` — requiring the judge to quote the supporting span — and validate the
-   judges against the ~10 hand-labelled rows ARCHITECTURE §11 asks for.** Until then read
-   faithfulness as an upper bound.
+2. **The faithfulness judge is roughly 90% reliable, and the earlier claim here was wrong.**
+   `make judges` grades it against `evals/datasets/judge_labels.jsonl` — ten hand-labelled rows
+   (ARCHITECTURE §11), each a passages/question/answer triple with a score a human stands
+   behind, verbatim corpus passages, and every premise behind a label ("this figure is absent
+   from this passage") checked mechanically.
 
-   **Still true, but the earlier statement of it was overstated.** PROGRESS previously said
-   the judge returned 1.000 while the figure check flagged 8 of 42 rows. The 8 was inflated by
-   a bug in the check itself (it was flagging comma-terminated figures, fixed 2026-10-21); the
-   true count on the baseline is **4 of 42**, against faithfulness 0.976. A judge scoring 0.976
-   on a set containing four answers that assert a figure from nowhere is still a judge not
-   doing its job — but it is a weaker statement than the one recorded before, and the
-   difference was a defect in our own instrument, not in the model.
+   **Result: v1 and v2 both agree 9/10**, stable across three repeat runs. The single
+   persistent disagreement is `jl-03`, where both judges score correct ledger arithmetic 0.5
+   and the label says 1.0 — they are too *harsh*, not too lenient. Neither version was lenient
+   on any row.
 
-   The figure check has now been wrong in both directions within two days: first clearing
-   fabrications whose digits sat inside a longer number, then flagging real figures followed by
-   a comma. Both are fixed and both have tests. Treat its absolute counts with the same
-   suspicion as the judge's until `judge_faithfulness.v2` and the hand-labelled rows exist.
+   **This overturns what Phase 2 recorded.** The founding anecdote — faithfulness 1.00 on an
+   answer whose central figure (`68,000`) was in none of its passages — is reproduced
+   deliberately as `jl-02`, and both judge versions score it **0.0**, correctly. One bad roll
+   on a 42-row run is entirely consistent with a judge that is right about nine times in ten;
+   it is not evidence of a systematic rubber stamp, and this file treated it as though it
+   were for two phases.
+
+   What remains true: ten rows is a small set (one row is ten points), the labels are the
+   author's, and ADR-017's same-family caveat is unaffected. Read faithfulness as a reasonable
+   relative signal, not as ground truth and not as a known fiction.
 
 3. **Judge scores carry run-to-run noise of at least ±0.05** (measured over five identical runs:
    faithfulness 0.940–1.000, correctness 0.726–0.821). Retrieval metrics are exact. Do not read
@@ -445,11 +484,9 @@ profile and the base for step 4 under the carry-forward rule.
 - Expect real latency: 20 cross-encoder passes per query on CPU is the most expensive thing
   in the pipeline so far. Record p50 honestly against hybrid's 2572 ms.
 
-**Do `judge_faithfulness.v2` first.** This was deferred on the explicit grounds that steps 1–3
-were judged on exact retrieval metrics. Step 4 is the first step whose case may rest on answer
-quality rather than recall, so the judge has to be worth reading before it is used to decide
-anything. That means: the v2 prompt requiring a quoted supporting span, plus the ~10
-hand-labelled rows ARCHITECTURE §11 asks for, validated against both judge versions.
+`judge_faithfulness.v2` and the hand-labelled rows are **done** — see the section above. The
+judge is calibrated at 9/10 and its verdicts are now span-checked, so step 4 can be argued on
+answer quality if the retrieval numbers are ambiguous.
 
 **And judge step 4 on multi-hop specifically** — see the step 3 notes. It is the one category
 that has degraded across the phase.
@@ -486,6 +523,20 @@ measured against.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — Phase 3 — judge v2 and the hand-labelled rows. Known issue 2 overturned.**
+  Wrote `judge_faithfulness.v2` (decompose into claims, quote a verbatim span for each),
+  `verify_spans` to check those quotes mechanically, ten hand-labelled rows with every label
+  premise verified against the corpus, and `make judges`. **The headline is a correction:**
+  the judge agrees with the labels 9/10 — and both versions score the founding anecdote
+  (faithfulness 1.00 on an absent `68,000`) correctly at 0.0 when it is reproduced as a
+  labelled row. PROGRESS had called the judge a provable rubber stamp for two phases on the
+  strength of one bad roll. v2 is adopted anyway, for auditability not accuracy: on the full
+  run it verified 114 of 131 claim spans and caught 2 stitched quotes, one joining text across
+  two documents, which v1 could not have surfaced. Costs +36% and reads 0.071 lower, so the
+  scoreboard carries a bridge row. The span checker itself was wrong first — flagging dropped
+  markdown and an empty refusal quote as fabrications — which is now fixed and tested.
+  211 tests, lint clean.
 
 - **2026-10-21 — Phase 3 — step 3 done: keyword FTS + RRF hybrid.**
   `keyword_search` over the existing tsvector, `fusion.py` (RRF, k=60, pure and exactly

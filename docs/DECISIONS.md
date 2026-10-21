@@ -206,6 +206,27 @@
 - **Amends:** ADR-021 (storage location, and the fingerprint field list). ADR-021 otherwise stands:
   `index_version` remains an integer slot, with the same no-op / refuse / coexist behaviour.
 
+### ADR-023 · The faithfulness judge is calibrated against hand-labelled rows, and must quote its evidence
+- **Decision:** `judge_faithfulness.v2` is the default. It decomposes an answer into claims and
+  must copy a verbatim supporting span for each one; `verify_spans` checks those quotes against
+  the passages after the call. Ten hand-labelled rows live in `evals/datasets/judge_labels.jsonl`
+  and are graded by `make judges`, which is run on any change to a judge prompt.
+- **Why:** a judge nobody calibrates is a number generator, and every faithfulness figure in the
+  scoreboard rests on it. Measuring it also corrected a two-phase-old mistake: PROGRESS had
+  called the judge a provable rubber stamp on the strength of one bad roll, and against the
+  labels both v1 and v2 agree 9/10 — including the exact anecdote the distrust was built on.
+- **Adopted for auditability, not accuracy.** v2 does not score better than v1 (9/10 both,
+  stable over three repeats). What it adds is that its verdicts can be checked: on a full
+  42-row run it verified 114 of 131 claim spans and caught 2 quotes that do not appear in the
+  passages, which v1 could not surface by construction.
+- **Tradeoffs:** +36% judge cost at list price, and faithfulness reads ~0.07 lower on identical
+  retrieval, so the scoreboard column is discontinuous at the switch and carries a bridge row.
+  Ten rows is a small set — one row is ten points — and the labels are the author's, so this
+  calibrates the judge against one human rather than against truth. ADR-017's same-family
+  caveat is unaffected.
+- **Supersedes:** nothing. Implements the "about 10 rows are hand-labelled to check the judge"
+  line in ARCHITECTURE §11, which had never been built.
+
 ---
 
 ## Open questions (resolve in the phase noted)
