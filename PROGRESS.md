@@ -3,8 +3,8 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 4 — Observability** · Status: ⬜ not started
-(Phase 3 complete: all 7 steps measured, `advanced.yaml` saved)
+**Phase 5 — Generation, context management, memory** · Status: ⬜ not started
+(Phase 4 complete: Langfuse tracing, SSE streaming, feedback, JSON logs)
 
 ## Phase status
 
@@ -14,7 +14,7 @@
 | 1 | Corpus + golden datasets | ✅ done | 2026-10-19 |
 | 2 | Ingestion + naive RAG + eval harness | ✅ done | 2026-10-20 |
 | 3 | Advanced retrieval + routing + semantic cache | ✅ done | 2026-10-21 |
-| 4 | Observability | ⬜ | |
+| 4 | Observability | ✅ done | 2026-10-21 |
 | 5 | Generation, context management, memory | ⬜ | |
 | 6 | Guardrails | ⬜ | |
 | 7 | Agentic RAG + MCP server | ⬜ | |
@@ -41,6 +41,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-21 | **step 5b** — `hyde`, hypothetical-answer probe | 79.0% | 84.9% | 0.578 | 0.964 | 0.821 | 3719 ms | $0.00101 |
 | 2026-10-21 | step 6 — `routed`, query router + doc-type filters | 72.2% | 76.6% | 0.567 | 0.988 | 0.821 | 3523 ms | $0.00112 |
 | **2026-10-21** | **`advanced` — the Phase 3 profile** | **77.8%** | **83.7%** | **0.571** | 0.976 | 0.857 | 3550 ms | $0.00091 |
+| 2026-10-21 | `advanced` re-run **after Phase 4 tracing** — no behaviour change intended | 78.2% | 83.3% | 0.565 | 0.976 | 0.821 | 3213 ms | $0.00121 |
 
 **The faithfulness column changes meaning at the last row.** Rows above it were graded by
 `judge_faithfulness.v1`; from step 4 onward the default is v2, which must quote the span
@@ -74,6 +75,36 @@ depend only on the index, which was verified byte-identical (same 49 chunks, sam
 token counts).
 
 The judge and latency columns moved for ordinary run-to-run reasons, not because of the fixes.
+
+### The Phase 4 confirmation run — tracing cost nothing measurable
+
+Phase 4 changed no retrieval or generation behaviour; it added spans around existing calls and
+`stage`/`prompt_version` arguments that are used for tracing and never sent to the provider.
+The run exists to prove that, and it does — **every delta is inside a band this file already
+documents**:
+
+| | Phase 3 `advanced` | after tracing | reading |
+|---|---|---|---|
+| Recall@5 | 77.8% | 78.2% | +0.4pp — stochastic, see below |
+| Context recall | 83.7% | 83.3% | −0.4pp — stochastic |
+| MRR | 0.571 | 0.565 | −0.006 — stochastic |
+| Faithfulness | 0.976 | 0.976 | identical |
+| Correctness | 0.857 | 0.821 | −0.036, inside the ±0.05 judge band (issue 3) |
+| p50 latency | 3550 ms | 3213 ms | **−337 ms** — tracing overhead is below the noise |
+| Cost/query | $0.00091 | $0.00121 | +33%, and **0.8% prefix-cached against this run** |
+
+**Retrieval metrics are not exact for this profile, and that correction matters.** This file has
+said that "retrieval metrics are exact" — true when it was written, because it was comparing
+`naive` runs, where the query reaching the retriever is the question itself. `advanced` has HyDE
+and query rewriting in front of retrieval, and both are *model calls*: the query is different on
+every run, so recall@k and MRR are stochastic here in a way they were not at the baseline. The
+sub-percentage-point movement above is that, not a regression — and it means any future
+`advanced`-to-`advanced` comparison needs more than one run before a small delta means anything.
+
+The cost rise is known issue 3b doing exactly what it says: **0.8% of input tokens were served
+from the provider's prefix cache in this run**, against the 52% that produced some earlier
+figures. Quoting the cost without that number beside it would read as a 33% regression caused by
+tracing, which it is not.
 
 ### Step 1 — semantic chunking + parent-child (slot 2, `semantic.yaml`)
 
@@ -328,9 +359,13 @@ Weakest by correctness: routing 0.33, multi-hop 0.62.
 
 1. **Judge scores carry run-to-run noise, and the band is wider than ±0.05.** Five runs on
    identical configuration have now given faithfulness 0.940 / 0.952 / 0.964 / 0.988 / 1.000 and
-   correctness 0.726 / 0.762 / 0.774 / 0.774 / 0.821. Retrieval metrics are exact and repeat to
-   the digit every time. A Phase 3 change that moves a judge score by 0.05 has moved nothing
-   measurable; a change that moves recall by 0.02 has.
+   correctness 0.726 / 0.762 / 0.774 / 0.774 / 0.821. A Phase 3 change that moves a judge score
+   by 0.05 has moved nothing measurable; a change that moves recall by 0.02 has.
+
+   Those five runs were on a configuration with no model call in front of retrieval, where
+   recall and MRR do repeat to the digit. **That is a property of those profiles, not of the
+   metrics** — `advanced` puts HyDE and a rewrite before the retriever, and they move by
+   fractions of a point between identical runs. See known issue 3.
 2. **The faithfulness judge is better than this file has been claiming** — see known issue 2,
    now rewritten against evidence rather than one anecdote. Measured against ten hand-labelled
    rows, it agrees **9/10**, including the exact failure shape this file was built around.
@@ -349,6 +384,31 @@ same-family self-evaluation. Read faithfulness and correctness as **relative** �
 comparing profiles against each other, not as ground truth.
 
 ## Decisions taken in chats
+
+- **ADR-024** — tracing context travels in contextvars, through one process-wide tracer. A
+  trace id is needed by the logger, by every span and by the response, so threading it would
+  put a tracing parameter on functions whose subject is retrieval, and the first call site to
+  forget it would orphan everything below. This is also how OpenTelemetry — and so the Langfuse
+  SDK — already propagates span context, which is why nested spans need no parent passed.
+  Two costs were paid in this chat and are written into the ADR: a contextvar set inside a
+  `@contextmanager` propagates to the caller and must be restored, and an async generator's
+  frame runs in whichever task calls `asend`.
+- **ADR-025** — a streamed answer is the *same* structured answer, with the `answer` field
+  lifted out of partial JSON, rather than a second prose-shaped prompt. One prompt and one
+  schema means streaming is a transport choice and the eval scoreboard describes both paths.
+  The alternative was easier to stream and would have forked generation into two paths whose
+  quality could drift apart with no test noticing.
+- **The semantic cache stays off, and is now instrumented.** Phase 4's build list asked for
+  cache hit/miss *events*, not for the cache to be wired into `/v1/chat`. Turning it on is a
+  correctness question that deserves its own step rather than arriving as a side effect of the
+  observability phase. The events are in place for when it does.
+- **Tracing is on by default** (`TRACING_ENABLED=true`) and inert without keys. A tracing
+  system nobody switched on traces nothing, and the first thing you reach for it is the
+  request that already went wrong; `build_tracer` returns the no-op when either key is blank,
+  so CI and anyone without a Langfuse is unaffected by the default rather than broken by it.
+- **Langfuse scores are a view; Postgres is the record.** Feedback is stored before it is
+  scored, and the response's `scored` says honestly whether the trace was annotated, so a
+  tracing outage cannot lose a user's rating.
 
 - **ADR-020** — `fastembed` (ONNX Runtime) is the local embedding runtime, not
   `sentence-transformers`. ADR-004's *models* are unchanged; only the engine differs, so vectors
@@ -411,6 +471,36 @@ The blocking-embedder fix matters more from Phase 3 on than it did here: the cro
 reranker is far heavier than the embedder and lands on the same event loop. `embed_passages` in
 ingestion is still synchronous and deliberately so — it runs in a CLI script, not a request.
 
+## What was built (Phase 4)
+
+- `src/sutra/observability/` — the module that was a stub since Phase 0:
+  - `context.py` — trace id and request fields in contextvars, with `bind_trace_id` for the
+    tracer, which learns the id only once the root span is open.
+  - `logs.py` — a hand-rolled JSON formatter (no new dependency) plus `TextFormatter` for
+    reading a local run by eye. `LOG_FORMAT` in config, default `json`.
+  - `tracing.py` — `LangfuseTracer`, a complete `NoOpTracer`, `build_tracer()`, and the
+    process-wide tracer accessors the pipeline calls.
+- `src/sutra/generation/partial_json.py` — the incremental reader that makes a streamed
+  structured answer possible (ADR-025).
+- `src/sutra/generation/stream.py` — `generate_answer_stream`, the same prompt and schema as
+  the buffered path.
+- `src/sutra/api/streaming.py` — SSE frames, headers, and `guarded`.
+- `src/sutra/api/routes_feedback.py` + `FeedbackRequest`/`FeedbackResponse`.
+- Spans across the pipeline: `retrieve` (parent) over `route`, `transform_query`,
+  `hybrid_search` → `vector_search`/`keyword_search`/`fusion`, `multi_query_fusion` and
+  `rerank`; `expand_to_parents` and `generate` beside it; a `GENERATION` per provider call,
+  named by stage and carrying its prompt version.
+- Events: `cache.hit`/`cache.miss`, `retrieval.candidates`, `retrieval.expanded`.
+- `LLMClient.complete/structured/stream` take `stage` and `prompt_version`;
+  `GenerationRecord.prompt_version` is populated for the first time.
+- `adapters.stream(schema=...)` — schema-constrained streaming via `responses.stream`.
+- `messages.trace_id` is written; `ChatResponse.trace_id` is returned.
+- `/v1/health` reports Langfuse but never fails on it.
+- Eval runs group in Langfuse by `session_id` (the run id) with `eval` / `profile:` / `slot:`
+  tags; the judges' generations are named.
+- `docker-compose.yml` fixed so the observability profile actually starts.
+- ADR-024 (contextvars + ambient tracer) and ADR-025 (streaming the structured answer).
+
 ## What was built (Phase 2)
 
 - `src/sutra/ingestion/` — `parse.py` (front-matter), `chunk.py` (hand-rolled recursive chunker
@@ -472,22 +562,36 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 
 ## Verified in this chat
 
-- `make ingest` → 49 chunks from 10 documents, 384-dim embeddings and tsvectors on all of them;
-  tsv stemming confirmed (`to_tsquery('waystones')` matches 34 chunks)
-- **ADR-021/022 behaviours all exercised live:** re-run is a no-op by fingerprint; changed
-  parameters into an occupied slot are refused *naming what changed*; a second slot coexists;
-  `--force` replaces; a fingerprint from an older schema is refused rather than crashing
-- `make coverage` → **72/72 cited quotes land whole inside a chunk** (11 in two chunks, which is
-  the overlap working). Both negative controls fail as they should
-- Retrieval: stored vectors verified against fresh embeddings (`cos = 1.000000`), and a chunk's
-  own text retrieves that chunk at similarity 1.0
-- **First live LLM calls ever made in this project.** The OpenAI adapter works end to end:
-  structured output parsed, citations resolved, tokens and cost accounted
-- `POST /v1/chat` against a real uvicorn server: session created and continued, both messages
-  persisted with `prompt_version`, a foreign user's `session_id` returns 404
-- `make eval` → the full 42-row baseline, all three judges scoring every row, $0.0212
-- `make test` → 156 passed · `make lint` clean (ruff + ruff format + pyright, 0 errors)
-- All commits authored by `rohhitrz`, no AI attribution, pushed to `origin main`
+Against the live stack, not by inspection:
+
+- **The Langfuse stack starts** (4.67.0, all seven services healthy) and the auto-provisioned
+  `LANGFUSE_INIT_*` keys authenticate. Two defects fixed to get there — see known issue 8.
+- **A trace tree with real per-stage latency.** An `advanced` turn produces 23 observations:
+  `chat` → `retrieve` → {`route` 3.8s, `transform_query` 4.3s (`rewrite` + `hyde`),
+  `hybrid_search` 0.26s → {`embed_query`, `vector_search`, `keyword_search`, `fusion`},
+  `rerank` 2.4s} and `generate` 5.3s → `answer`. Nesting comes from OTel's context; no parent
+  is passed anywhere.
+- **Generations carry what they should**: model, `{input, output, total, cache_read_input_tokens,
+  reasoning}`, our own priced cost (not Langfuse's model-matching guess), and a qualified prompt
+  version — `answer.v1`, `hyde.v1`, `query_transform.v1`, `judge_faithfulness.v2`.
+- **Streaming from `curl -N`**: `meta` → 27 `token` frames → `citations` → `done`. The tokens
+  are prose, not JSON fragments, and reassemble into exactly the answer.
+- **Feedback end to end**: a −1 with a comment on a real turn, the row in Postgres and the score
+  on that trace id in ClickHouse.
+- **`/v1/health`** reports `tracing: langfuse at http://localhost:3000` and stays `ok`.
+- **Eval runs group**: a 3-row run produced one `session_id`, 3 traces, 75 observations, tags
+  `['eval','profile:advanced','slot:3']`.
+- **`make eval` on `advanced`, the full 42 rows** → recall@5 78.2%, context recall 83.3%,
+  MRR 0.565, faithfulness 0.976, correctness 0.821, p50 3213 ms, $0.0508 for the run at 0.8%
+  prefix-cached. Every delta against Phase 3's row is inside a documented band — see the
+  confirmation-run section above.
+- `make coverage` → 72/72 cited quotes survive chunking · `make validate` → datasets consistent
+  · `make cache` → all six probes correct, no cross-user leak, no stale version
+- `make test` → **457 passed** · `make lint` clean (ruff + ruff format + pyright, 0 errors)
+- `make judges` → **8/10 this run** (jl-03 and jl-08, both scored *too harsh*, never lenient).
+  PROGRESS has recorded 9/10 with jl-03 as the single persistent disagreement; jl-08 is new
+  here. Within the band known issue 3 describes — ten rows means one row is ten points — and
+  the direction is the property that matters.
 
 ## Known issues / tech debt
 
@@ -525,8 +629,15 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
    relative signal, not as ground truth and not as a known fiction.
 
 3. **Judge scores carry run-to-run noise of at least ±0.05** (measured over five identical runs:
-   faithfulness 0.940–1.000, correctness 0.726–0.821). Retrieval metrics are exact. Do not read
-   a judge delta smaller than the band as a result.
+   faithfulness 0.940–1.000, correctness 0.726–0.821). Do not read a judge delta smaller than
+   the band as a result.
+
+   **Retrieval metrics are exact only when nothing model-backed sits in front of retrieval.**
+   That held for every `naive`-family comparison, where the query reaching the retriever is the
+   question itself. It does *not* hold for `advanced`: HyDE and query rewriting are model calls,
+   so the query differs run to run and recall@k and MRR move with it (measured: ±0.4pp and
+   ±0.006 on two runs of identical code). A small `advanced`-to-`advanced` delta needs repeats
+   before it means anything.
 
 3b. **Cost per run is not a stable measurement.** It swings ~50% on how warm the provider's
    prefix cache is (0% to 51.2% of input tokens served cached across three runs doing identical
@@ -534,8 +645,7 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 
 4. **`POST /v1/chat` has no authentication.** `SUTRA_API_KEY` exists in config and nothing checks
    it. Fine for a local dev server; belongs with the Phase 6 guardrail work. Also no rate
-   limiting, and no streaming (the response is buffered JSON; `LLMClient.stream()` already
-   exists and ARCHITECTURE §5 specifies the SSE event shape).
+   limiting. (Streaming was the other half of this item and is done — Phase 4, ADR-025.)
 
 5. **No token budget.** `MAX_ANSWER_TOKENS` is a flat cap. ARCHITECTURE §5's real budget — system
    + memory + history + chunks + answer reserve within the model window, with a defined trim
@@ -550,9 +660,13 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
    only prefixes above a 1024-token minimum. The ordering is the precondition, not a saving; it
    starts paying once memory and guardrail instructions grow the stable block (Phases 5–6).
 
-8. **The Langfuse stack has never been started.** Only `docker compose config` was validated, so
-   image tags, env vars and the auto-provisioned `LANGFUSE_INIT_*` keys are unproven. Budget time
-   in Phase 4.
+8. ~~**The Langfuse stack has never been started.**~~ **Closed in Phase 4**, and it was right to
+   budget time for it: two defects were waiting behind `docker compose config`, which
+   type-checks the file and starts nothing. `minio/minio:latest` no longer pulls anonymously
+   (now `cgr.dev/chainguard/minio`, as upstream Langfuse does), and
+   `LANGFUSE_INIT_USER_EMAIL=dev@localhost` failed Langfuse's own validation for having no
+   TLD, crash-looping the web container on every request. Both fixed and the stack verified
+   end to end on Langfuse 4.67.0.
 
 9. **Fallback chain and model routing are still structural no-ops.** Both roles point at one
    model (ADR-017), so `LLM_FALLBACK_MODELS` has nothing to fall back to.
@@ -571,46 +685,84 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 13. `docs/BUILD_PLAN.md` has uncommitted whitespace-only changes (blank lines around headings)
     from an editor's markdown formatter, not from any phase work. Left alone deliberately.
 
+14. **An eval run with `--limit` overwrites the dated report of the same profile.** The runner
+    guards `--baseline` against `--limit` but not the dated file, so a 2-row smoke run silently
+    replaced `evals/reports/2026-10-21_advanced.*`. The numbers survived in this scoreboard and
+    the full run regenerated it, but the guard is one-sided and should be extended — a limited
+    run is not a result and should not be able to look like one.
+
+15. **Langfuse v4 runs in `events_only` mode.** The legacy `GET /api/public/traces/{id}` is gone
+    (404 with a pointer to the v4 docs), the `observations` ClickHouse table stays empty, and
+    everything lands in `events_full`. Read traces through
+    `/api/public/v2/observations?traceId=...` and `/api/public/v3/scores` — and note both list
+    endpoints omit fields (model, usage, cost, input/output on observations; trace id and
+    comment on scores), so verifying those needs ClickHouse or the UI, not the list API.
+
+16. **The tracer is process-global mutable state** (ADR-024), set by `set_tracer()` at startup
+    and by the eval runner. Accepted deliberately over threading `tracer=` through retrieval,
+    but it means a caller that builds an `LLMClient` before `set_tracer` gets the no-op. The
+    client defaulting to `get_tracer()` makes that the only remaining way to lose generations.
+
+17. **Span inputs and outputs carry the question and the retrieved passages.** Harmless on a
+    fictional corpus and `TRACING_CAPTURE_CONTENT=false` turns it off, but the default is on
+    and would be the wrong default for real data.
+
 ## Repo
 - GitHub: https://github.com/rohhitrz/sutra (public)
 
 ## Next step
 
-**Phase 3 is done.** All seven steps are implemented, measured and recorded; `advanced.yaml`
-is the saved best profile and the base for everything after it. Index slot 3 is what it runs
-against. Slots 1 and 2 are kept so earlier rows stay reproducible.
+**Phase 4 is done.** Tracing, streaming and feedback are built, and the Langfuse stack is
+proven rather than assumed. Start **Phase 5 — Generation, context management, memory** with
+the opening prompt in `docs/BUILD_PLAN.md`. Carry these in:
 
-Start **Phase 4 — Observability** with the opening prompt in `docs/BUILD_PLAN.md`. Carry
-these in:
+- **The traces answer Phase 3's open latency question, and the answer is not retrieval.** On an
+  `advanced` turn, `retrieve` spends ~10.8s of which `route` is 3.8s, the query transforms 4.3s
+  and the cross-encoder 2.4s — while the actual hybrid search is **0.2s**. The model-backed
+  stages are the cost. No aggregate latency number in the eval reports could have said that,
+  and it is the first thing to look at if Phase 5 needs budget.
+- **Phase 3's two unexplained results are now investigable.** Temporal lost 28.6pp at step 4 and
+  never recovered; multi-hop moved in both directions. Both are per-stage retrieval questions,
+  and each eval row now has a span tree. Filter Langfuse by `profile:advanced` and the row's
+  category and read `rerank`'s `max_rank_shift` and `promoted_from_outside_top_k`.
+- **Prompt caching should start paying in Phase 5** (known issue 7). The stable system block is
+  ~425 tokens against OpenAI's 1024-token minimum; memory and guardrail instructions are what
+  grow it past the threshold. The traces already record `cache_read_input_tokens` per
+  generation, so the moment it starts working will be visible rather than inferred.
+- **`.env` serves the naive baseline, not `advanced`.** `INDEX_VERSION=1` with hybrid, rerank,
+  HyDE and expansion all off, so `make dev` answers from slot 1 with vector-only retrieval while
+  `advanced.yaml` (slot 3, everything on) is the measured best. The eval runner is unaffected —
+  a profile overrides config by design — but a human poking the API gets Phase 2's quality.
+  **Decide in Phase 5 whether `.env.example` should default to the advanced configuration.**
+- **The semantic cache is still off**, now with its hit/miss events in place. Wiring it into
+  `/v1/chat` remains a deliberate, separate decision.
+- **`make cache`, `make judges` and `make coverage` remain preconditions, not extras.** `make
+  cache` caught a circular import this phase that the whole test suite could not see, because
+  pytest happens to import the modules in the one order that works.
 
-- **The Langfuse stack has never been started** (known issue 8). Only `docker compose config`
-  was ever validated, so the image tags, env vars and auto-provisioned `LANGFUSE_INIT_*` keys
-  are unproven. Budget real time for it.
-- **The pipeline is now deep enough that a trace is worth having.** One `/v1/chat` turn is a
-  router call, a rewrite call, a HyDE call, two retrievals per query, a fusion, twenty
-  cross-encoder passes, an expansion and an answer call. Nothing today can tell you which of
-  those spent the 3.5 seconds; `tracing.py` has been a no-op since Phase 0 and this is the
-  phase it stops being one.
-- **Two unexplained results are waiting for better instrumentation.** Temporal lost 28.6pp at
-  step 4 and never recovered, and multi-hop moved in both directions across the phase with no
-  surviving explanation. Both are retrieval-stage questions that per-stage traces should
-  answer directly.
-- **`make cache`, `make judges` and `make coverage` are preconditions, not extras.** All three
-  are cheap, all three found real defects this phase, and two of those defects were in the
-  checking tools themselves.
+Leftovers:
 
-Leftovers that did not block Phase 3:
-
-- `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known
-  issue 13).
-- The semantic cache is implemented and off by default, including in `advanced.yaml` — a
-  cache hit would stand in for a retrieval the eval is meant to measure. Wiring it into
-  `/v1/chat` is a Phase 4+ decision.
-- `multi_query` and `router_enabled` are both implemented, both off, and both documented as
-  losing here rather than being deleted.
+- `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known issue 13).
+- `multi_query` and `router_enabled` remain implemented, off, and documented as losing here.
+- The `--limit` report-overwrite guard is one-sided (known issue 14).
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — Phase 4 — DONE. Tracing, streaming, feedback.**
+  The Langfuse stack had never been started (known issue 8) and two defects were waiting
+  behind `docker compose config`: `minio/minio` no longer pulls anonymously, and
+  `dev@localhost` fails Langfuse's own email validation, crash-looping the web container.
+  **The first full trace earned the phase on its own** — of 10.8s in `retrieve`, `route` is
+  3.8s, the query transforms 4.3s and the cross-encoder 2.4s, while the actual hybrid search
+  is 0.2s. Streaming keeps one prompt and one schema by lifting the `answer` field out of
+  partial JSON (ADR-025), so the scoreboard still describes both paths. Three bugs found by
+  doing rather than by reading: `LLMClient` defaulted to the no-op tracer, so every trace was
+  silently missing its generations, tokens and cost; `LangfuseTracer.request` leaked the trace
+  id past the span's end, which would have made the eval runner file each row under the
+  previous row's trace; and `make cache` hit a circular import the whole test suite could not
+  see, because pytest happens to import the modules in the one order that works. 457 tests,
+  lint clean.
 
 - **2026-10-21 — Phase 3 — DONE. Steps 5–7, and `advanced.yaml` saved.**
   HyDE was the biggest retrieval win after step 1 (context recall 82.1% → 84.9%) and the

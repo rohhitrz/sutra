@@ -32,3 +32,5 @@ The response's `meta` frame carries the `trace_id`. Open `http://localhost:3000`
 Note that Langfuse v4 runs in **events_only mode**: the legacy `/api/public/traces/{id}` endpoint is gone, and traces are read through `/api/public/v2/observations?traceId=...` and `/api/public/v3/scores`.
 
 Without the stack running, `build_tracer()` returns the no-op and everything still works — which is how the test suite exercises the instrumentation with no Langfuse at all.
+
+An eval run groups itself: every row shares one Langfuse `session_id` (`advanced-20261021-163858`) and carries the tags `eval`, `profile:<name>` and `slot:<n>`, so a run is one thing in the UI rather than 42 unrelated traces.
