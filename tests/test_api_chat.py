@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 
@@ -13,6 +14,7 @@ from sqlalchemy import delete, select
 from sutra.api.app import create_app
 from sutra.api.chat import SessionNotFound, run_chat_turn
 from sutra.api.schemas import ChatRequest
+from sutra.api.streaming import sse_frame
 from sutra.config import Settings
 from sutra.db.engine import get_engine, get_sessionmaker
 from sutra.db.models import Message as MessageRow
@@ -36,12 +38,17 @@ async def client() -> AsyncIterator[httpx2.AsyncClient]:
 # ---------------------------------------------------------------------------
 
 
-async def test_streaming_is_refused_rather_than_silently_downgraded(client: httpx2.AsyncClient):
-    """A caller asking for stream=true and getting a buffered body would conclude streaming
-    works. Phase 2 does not implement it, so it says so."""
-    response = await client.post("/v1/chat", json={"query": "q", "user_id": "u", "stream": True})
-    assert response.status_code == 501
-    assert "stream" in response.json()["detail"].lower()
+async def test_streaming_is_advertised_in_the_openapi_contract(client: httpx2.AsyncClient):
+    """Phase 2 returned 501 here. Phase 4 implements it, so the 501 is gone from the schema.
+
+    The behaviour is covered by the integration tests below, which need a database.
+    """
+    schema = (await client.get("/openapi.json")).json()
+    responses = schema["paths"]["/v1/chat"]["post"]["responses"]
+    assert "501" in responses
+    assert "mode" in responses["501"]["description"]
+    # The 501 that remains is about agent mode, not about streaming.
+    assert "stream" not in responses["501"]["description"].lower()
 
 
 async def test_agent_mode_is_refused(client: httpx2.AsyncClient):
@@ -89,8 +96,7 @@ class ScriptedAdapter:
     async def complete(self, *, model, messages, max_output_tokens, temperature, timeout):
         raise AssertionError("unused")
 
-    async def structured(self, *, model, messages, schema, max_output_tokens, temperature, timeout):
-        self.calls += 1
+    def _result(self, model: str) -> RawResult:
         return RawResult(
             text=self.draft.model_dump_json(),
             model=model,
@@ -101,9 +107,23 @@ class ScriptedAdapter:
             parsed=self.draft,
         )
 
-    async def stream(self, *, model, messages, max_output_tokens, temperature, timeout):
-        raise AssertionError("unused")
-        yield None, None
+    async def structured(self, *, model, messages, schema, max_output_tokens, temperature, timeout):
+        self.calls += 1
+        return self._result(model)
+
+    async def stream(
+        self, *, model, messages, max_output_tokens, temperature, timeout, schema=None
+    ):
+        """What a schema-constrained provider stream looks like: JSON, in arbitrary pieces.
+
+        The split points are deliberately awkward — mid-key and mid-word — because that is
+        what the real thing does and it is what the partial-JSON reader has to survive.
+        """
+        assert schema is not None, "the answer stream must be schema-constrained"
+        document = self.draft.model_dump_json()
+        for i in range(0, len(document), 7):
+            yield document[i : i + 7], None
+        yield None, self._result(model)
 
 
 def a_chunk(n: int) -> RetrievedChunk:
@@ -256,3 +276,170 @@ async def test_an_unknown_session_returns_404_over_http(client: httpx2.AsyncClie
         json={"query": "q", "user_id": "rohit", "session_id": str(uuid.uuid4())},
     )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# SSE streaming
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse(body: str) -> list[tuple[str, dict]]:
+    """Parse an SSE body into (event, data) pairs.
+
+    Hand-written rather than mocked: asserting on the bytes is the only way to know the wire
+    format is right, and the format *is* the contract a client depends on.
+    """
+    events: list[tuple[str, dict]] = []
+    for block in body.split("\n\n"):
+        if not block.strip():
+            continue
+        name: str | None = None
+        payload: str | None = None
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                name = line.removeprefix("event: ")
+            elif line.startswith("data: "):
+                payload = line.removeprefix("data: ")
+        assert name is not None, f"frame without an event name: {block!r}"
+        assert payload is not None, f"frame without data: {block!r}"
+        events.append((name, json.loads(payload)))
+    return events
+
+
+@pytest.fixture
+def stream_deps(monkeypatch: pytest.MonkeyPatch, settings: Settings):
+    """Same stubs as `turn_deps`, wired into the app so an HTTP request can use them."""
+    chunks = [a_chunk(1), a_chunk(2)]
+    monkeypatch.setattr("sutra.api.chat.search", lambda *a, **kw: _async_value(chunks))
+    draft = AnswerDraft(
+        answer='Kesh Ithar\'s population is 68,000, per the "places" wiki. [1]',
+        citations=[1],
+        confidence=0.9,
+        refused=False,
+    )
+    adapter = ScriptedAdapter(draft)
+    llm = LLMClient(settings, adapter=adapter)
+    monkeypatch.setattr("sutra.api.routes_chat.run_chat_turn_stream", _stream_with(llm, settings))
+    return draft, adapter
+
+
+def _stream_with(llm: LLMClient, settings: Settings):
+    from sutra.api.chat import run_chat_turn_stream as real
+
+    def wrapped(request, *, session_id, **kwargs):
+        return real(request, session_id=session_id, settings=settings, client=llm, **kwargs)
+
+    return wrapped
+
+
+@pytest.mark.integration
+async def test_a_streamed_turn_emits_meta_tokens_citations_then_done(
+    client: httpx2.AsyncClient, stream_deps
+):
+    draft, _ = stream_deps
+    response = await client.post(
+        "/v1/chat", json={"query": "population of Kesh Ithar?", "user_id": "rohit", "stream": True}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    # Without this a proxy may buffer the whole stream and deliver it as one block, which
+    # looks exactly like a server that does not stream.
+    assert response.headers["x-accel-buffering"] == "no"
+
+    events = _parse_sse(response.text)
+    names = [name for name, _ in events]
+
+    # `meta` first: a client has the trace id even if the answer fails half way through.
+    assert names[0] == "meta"
+    assert names[-1] == "done"
+    assert names.count("citations") == 1
+    assert names.index("citations") > names.index("token")
+    assert "error" not in names
+
+    meta = events[0][1]
+    assert meta["trace_id"]
+    session_id = uuid.UUID(meta["session_id"])
+    try:
+        # The tokens reassemble into exactly the answer — the whole point of option A.
+        streamed = "".join(data["text"] for name, data in events if name == "token")
+        assert streamed == draft.answer
+
+        citations = next(data for name, data in events if name == "citations")
+        assert [c["label"] for c in citations["citations"]] == [1]
+        assert citations["dropped_citations"] == []
+
+        done = events[-1][1]
+        assert done["refused"] is False
+        assert done["confidence"] == 0.9
+        assert done["usage"]["input_tokens"] == 1200
+        assert uuid.UUID(done["message_id"])
+    finally:
+        await _cleanup(session_id)
+
+
+@pytest.mark.integration
+async def test_a_streamed_turn_persists_the_same_two_messages_as_a_buffered_one(
+    client: httpx2.AsyncClient, stream_deps
+):
+    """Streaming is a transport, not a different kind of turn."""
+    draft, _ = stream_deps
+    response = await client.post(
+        "/v1/chat", json={"query": "population?", "user_id": "rohit", "stream": True}
+    )
+    events = _parse_sse(response.text)
+    session_id = uuid.UUID(events[0][1]["session_id"])
+    try:
+        messages = await _messages_for(session_id)
+        assert [m.role for m in messages] == ["user", "assistant"]
+        assert messages[1].content == draft.answer
+        # The trace id is on both rows, so an answer in the database can be opened as a trace.
+        assert messages[0].trace_id == events[0][1]["trace_id"]
+        assert messages[1].trace_id == events[0][1]["trace_id"]
+    finally:
+        await _cleanup(session_id)
+
+
+@pytest.mark.integration
+async def test_an_unknown_session_is_a_404_not_an_error_frame(
+    client: httpx2.AsyncClient, stream_deps
+):
+    """A 200 whose body contains an apology is not an error a client can handle."""
+    response = await client.post(
+        "/v1/chat",
+        json={
+            "query": "q",
+            "user_id": "rohit",
+            "stream": True,
+            "session_id": str(uuid.uuid4()),
+        },
+    )
+    assert response.status_code == 404
+    assert not response.headers["content-type"].startswith("text/event-stream")
+
+
+@pytest.mark.integration
+async def test_a_failure_part_way_through_becomes_a_terminal_error_frame(
+    client: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch, settings: Settings
+):
+    """Once the first byte is sent the status is gone, so the client has to be told in-band.
+
+    A response that simply stops is indistinguishable from a dropped connection, and the
+    client has no way to tell a truncated answer from a complete one.
+    """
+    chunks = [a_chunk(1)]
+    monkeypatch.setattr("sutra.api.chat.search", lambda *a, **kw: _async_value(chunks))
+
+    async def exploding_stream(*a, **kw):
+        yield sse_frame("meta", {"trace_id": "t", "session_id": str(uuid.uuid4())})
+        msg = "provider went away"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("sutra.api.routes_chat.run_chat_turn_stream", exploding_stream)
+    response = await client.post(
+        "/v1/chat", json={"query": "q", "user_id": "rohit", "stream": True}
+    )
+
+    assert response.status_code == 200  # the status was already sent
+    events = _parse_sse(response.text)
+    assert [name for name, _ in events] == ["meta", "error"]
+    assert "failed" in events[-1][1]["detail"]

@@ -69,9 +69,11 @@ class FakeAdapter:
             self.failures[model] = remaining - 1
             raise _conn_error()
 
-    def _result(self, model: str, *, parsed: BaseModel | None = None) -> RawResult:
+    def _result(
+        self, model: str, *, parsed: BaseModel | None = None, text: str | None = None
+    ) -> RawResult:
         return RawResult(
-            text="The Archivist keeps the Meridian records.",
+            text=text if text is not None else "The Archivist keeps the Meridian records.",
             model=model,
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
@@ -91,9 +93,23 @@ class FakeAdapter:
         return self._result(model, parsed=schema(answer="kept the records", confidence=0.9))
 
     async def stream(
-        self, *, model: str, messages: Sequence[Message], max_output_tokens, temperature, timeout
+        self,
+        *,
+        model: str,
+        messages: Sequence[Message],
+        max_output_tokens,
+        temperature,
+        timeout,
+        schema=None,
     ) -> AsyncIterator[tuple[str | None, RawResult | None]]:
         self._maybe_fail(model)
+        self.streamed_schema = schema
+        if schema is not None:
+            # A schema-constrained stream emits JSON fragments, not prose.
+            for piece in ('{"answer": "The Arch', 'ivist keeps."', ', "confidence": 0.9}'):
+                yield piece, None
+            yield None, self._result(model, text='{"answer": "The Archivist keeps."}')
+            return
         for piece in ("The ", "Archivist ", "keeps."):
             yield piece, None
         yield None, self._result(model)

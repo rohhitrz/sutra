@@ -69,7 +69,9 @@ class ScriptedAdapter:
             parsed=self.draft,
         )
 
-    async def stream(self, *, model, messages, max_output_tokens, temperature, timeout):
+    async def stream(
+        self, *, model, messages, max_output_tokens, temperature, timeout, schema=None
+    ):
         raise AssertionError("not used")
         yield None, None
 

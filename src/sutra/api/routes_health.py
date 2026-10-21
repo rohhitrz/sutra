@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Response, status
 
 from sutra import __version__
 from sutra.api.schemas import HealthComponent, HealthResponse
 from sutra.config import get_settings
 from sutra.db.engine import ping
+from sutra.observability.tracing import get_tracer
 
 router = APIRouter(tags=["health"])
 
@@ -29,7 +32,33 @@ async def health(response: Response) -> HealthResponse:
             detail=None if db_ok else "SELECT 1 failed — is `make up` running?",
         )
     ]
-    overall_ok = all(component.ok for component in components)
+
+    # Tracing is reported but never fails the check. Losing traces degrades what you can see,
+    # not what you can serve, and a health check that takes the service out of a load
+    # balancer because the observability stack is down has inverted its own purpose.
+    tracer = get_tracer()
+    auth_check = getattr(tracer, "auth_check", None)
+    if auth_check is None:
+        tracing_detail = "off" if not settings.tracing_enabled else "no Langfuse keys configured"
+        components.append(HealthComponent(name="tracing", ok=True, detail=tracing_detail))
+    else:
+        reachable = await asyncio.to_thread(auth_check)
+        components.append(
+            HealthComponent(
+                name="tracing",
+                ok=True,
+                detail=(
+                    f"langfuse at {settings.langfuse_host}"
+                    if reachable
+                    else f"langfuse at {settings.langfuse_host} unreachable — "
+                    "traces are being dropped"
+                ),
+            )
+        )
+
+    # `required` rather than every component, for the reason above.
+    required = [c for c in components if c.name != "tracing"]
+    overall_ok = all(component.ok for component in required)
     if not overall_ok:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 

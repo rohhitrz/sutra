@@ -138,7 +138,7 @@ def resolve_citations(
     return citations, dropped
 
 
-def _no_context_answer(prompt_version: str, model: str) -> Answer:
+def no_context_answer(prompt_version: str, model: str) -> Answer:
     """Refuse without calling the model.
 
     Nothing was retrieved, so there is no grounded answer available and the correct response is
@@ -173,7 +173,7 @@ async def generate_answer(
 
     prompt = loader.get(PROMPT_NAME)
     if not chunks:
-        return _no_context_answer(prompt.version, settings.llm_strong)
+        return no_context_answer(prompt.version, settings.llm_strong)
 
     messages = split_prompt(prompt, context=format_context(chunks), question=question)
     # The prompt file's own front-matter carries the temperature, so changing it is a prompt

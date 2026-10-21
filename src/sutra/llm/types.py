@@ -81,6 +81,14 @@ class StreamDone(BaseModel):
     usage: Usage
     model: str
     response_id: str | None = None
+    # Populated only for a schema-constrained stream: the provider's validated instance, so a
+    # streamed structured answer is parsed exactly like a non-streamed one instead of being
+    # re-parsed from the text we happened to accumulate.
+    parsed: Any = None
+    # The full accumulated output. For a schema-constrained stream this is the JSON document,
+    # which is what lets a truncated response still yield a partial answer when `parsed` is
+    # absent (a dropped connection, or an output budget that ran out mid-object).
+    text: str = ""
 
 
 StreamEvent = StreamDelta | StreamDone

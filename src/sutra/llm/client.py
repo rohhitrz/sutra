@@ -391,6 +391,7 @@ class LLMClient:
         temperature: float | None = None,
         stage: str | None = None,
         prompt_version: str | None = None,
+        schema: type[BaseModel] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream text deltas, then one terminal event carrying usage and cost.
 
@@ -399,6 +400,10 @@ class LLMClient:
 
         The span stays open for the whole stream, so its duration is the time the caller spent
         receiving tokens rather than the time to the first one.
+
+        With `schema`, the deltas are fragments of a JSON object rather than prose, and
+        `StreamDone.parsed` carries the provider's validated instance. See
+        `sutra.generation.partial_json` for why that is the shape a reader gets served from.
         """
         started = time.perf_counter()
         resolved = self.resolve_model(role, model)
@@ -411,6 +416,7 @@ class LLMClient:
                 max_output_tokens=max_output_tokens,
                 temperature=self.effective_temperature(resolved, temperature),
                 timeout=self._settings.llm_timeout_seconds,
+                schema=schema,
             ):
                 if delta is not None:
                     yield StreamDelta(text=delta)
@@ -430,7 +436,13 @@ class LLMClient:
                 streamed=True,
                 prompt_version=prompt_version,
             )
-        yield StreamDone(usage=usage, model=final.model, response_id=final.response_id)
+        yield StreamDone(
+            usage=usage,
+            model=final.model,
+            response_id=final.response_id,
+            parsed=final.parsed,
+            text=final.text,
+        )
 
 
 @asynccontextmanager

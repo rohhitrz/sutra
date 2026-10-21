@@ -32,7 +32,39 @@ async def test_health_reports_ok_when_the_database_is_reachable(
     body = response.json()
     assert body["status"] == "ok"
     assert body["version"] == "0.1.0"
-    assert body["components"] == [{"name": "postgres", "ok": True, "detail": None}]
+    components = {c["name"]: c for c in body["components"]}
+    assert components["postgres"] == {"name": "postgres", "ok": True, "detail": None}
+    # Tracing is reported so you can see whether traces are landing...
+    assert components["tracing"]["ok"] is True
+
+
+async def test_health_stays_ok_when_tracing_is_unavailable(
+    client: httpx2.AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    """...but it never fails the check.
+
+    Losing traces degrades what you can see, not what you can serve. A health check that
+    pulls the service out of a load balancer because the observability stack is down has
+    inverted its own purpose.
+    """
+
+    async def ok() -> bool:
+        return True
+
+    class UnreachableTracer:
+        def auth_check(self) -> bool:
+            return False
+
+    monkeypatch.setattr("sutra.api.routes_health.ping", ok)
+    monkeypatch.setattr("sutra.api.routes_health.get_tracer", lambda: UnreachableTracer())
+    response = await client.get("/v1/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    tracing = next(c for c in body["components"] if c["name"] == "tracing")
+    assert tracing["ok"] is True
+    assert "dropped" in tracing["detail"]
 
 
 async def test_health_returns_503_when_the_database_is_down(

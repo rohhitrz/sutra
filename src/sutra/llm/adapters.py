@@ -61,6 +61,7 @@ class LLMAdapter(Protocol):
         max_output_tokens: int,
         temperature: float | None,
         timeout: float,
+        schema: type[SchemaT] | None = ...,
     ) -> AsyncIterator[tuple[str | None, RawResult | None]]: ...
 
     async def structured(
@@ -196,17 +197,24 @@ class OpenAIAdapter:
         max_output_tokens: int,
         temperature: float | None,
         timeout: float,
+        schema: type[SchemaT] | None = None,
     ) -> AsyncIterator[tuple[str | None, RawResult | None]]:
         """Yields `(delta, None)` for each text chunk, then exactly one `(None, result)` with
         the final usage. Usage is only known once the stream completes, which is why the
-        terminal event is separate."""
+        terminal event is separate.
+
+        With `schema`, the response is still constrained at decode time and **the deltas are
+        fragments of the JSON object**, not prose. Callers that want a field out of it as it
+        arrives have to parse the partial JSON — see `sutra.generation.partial_json`. The
+        alternative was a second, prose-shaped answer prompt, which would have meant two
+        generation paths of differing quality and a scoreboard describing only one of them.
+        """
         instructions, input_messages = _split_instructions(messages)
         kwargs: dict[str, object] = {
             "model": model,
             "input": input_messages,
             "max_output_tokens": max_output_tokens,
             "timeout": timeout,
-            "stream": True,
         }
         if instructions is not None:
             kwargs["instructions"] = instructions
@@ -215,8 +223,8 @@ class OpenAIAdapter:
 
         chunks: list[str] = []
         final: RawResult | None = None
-        stream = await self._client.responses.create(**kwargs)  # type: ignore[arg-type]
-        async for event in stream:  # type: ignore[union-attr]
+
+        async for event in self._raw_stream_events(kwargs, schema):
             etype = getattr(event, "type", "")
             if etype == "response.output_text.delta":
                 delta = getattr(event, "delta", "") or ""
@@ -234,6 +242,10 @@ class OpenAIAdapter:
                     cached_tokens=cached,
                     reasoning_tokens=reasoning,
                     response_id=getattr(response, "id", None) if response else None,
+                    # The provider's own validated instance, so a streamed structured answer
+                    # is parsed exactly like a non-streamed one rather than re-parsed from
+                    # the text we happened to accumulate.
+                    parsed=getattr(response, "output_parsed", None) if response else None,
                 )
 
         if final is None:
@@ -241,6 +253,25 @@ class OpenAIAdapter:
             # what we received rather than silently returning nothing.
             final = RawResult(text="".join(chunks), model=model)
         yield None, final
+
+    async def _raw_stream_events(
+        self, kwargs: dict[str, object], schema: type[SchemaT] | None
+    ) -> AsyncIterator[object]:
+        """The provider's event stream, schema-constrained or not.
+
+        Two call shapes because the SDK offers two: `responses.create(stream=True)` for free
+        text, and `responses.stream(text_format=...)`, a context manager that also attaches
+        the parsed instance. Isolated here so `stream` above has one loop rather than two.
+        """
+        if schema is None:
+            raw = await self._client.responses.create(stream=True, **kwargs)  # type: ignore[arg-type]
+            async for event in raw:  # type: ignore[union-attr]
+                yield event
+            return
+
+        async with self._client.responses.stream(text_format=schema, **kwargs) as raw:  # type: ignore[arg-type]
+            async for event in raw:
+                yield event
 
     async def structured(
         self,
