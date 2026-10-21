@@ -227,6 +227,62 @@
 - **Supersedes:** nothing. Implements the "about 10 rows are hand-labelled to check the judge"
   line in ARCHITECTURE §11, which had never been built.
 
+### ADR-024 · Tracing context travels in contextvars, through one process-wide tracer
+
+- **Decision:** the current trace id and request fields live in `contextvars`
+  (`sutra.observability.context`), and the tracer is a process-wide instance installed at
+  startup and read through `get_tracer()`. Stage functions open spans by calling the
+  module-level `stage()`; nothing in the pipeline takes a `tracer=` parameter.
+- **Why:** a trace id is needed by the log formatter, by every span and by the response — that
+  is, by code at every depth of the call stack. Threading it would add an argument to functions
+  whose subject is retrieval (`keyword_search(query, session, k, index_version, trace_id)`), and
+  the first call site that forgot it would silently orphan everything below it. `contextvars` is
+  the asyncio-correct mechanism: each task gets its own copy, two concurrent requests cannot see
+  each other's ids, and a value set before `asyncio.gather` is visible in every branch. It is
+  also how OpenTelemetry — and therefore the Langfuse SDK — propagates span context already, so
+  nested spans need no parent passed to them.
+- **The exception that proves the rule:** `LLMClient` takes an optional `tracer=` for tests, but
+  *defaults* to the ambient one. It was first written defaulting to the no-op, and the result
+  was traces silently missing every generation, every token count and every cost. A
+  cross-cutting dependency whose default is "off" fails quietly, which is the worst way for an
+  observability component to fail.
+- **Tradeoffs:** process-global mutable state, which is exactly what dependency injection exists
+  to avoid, and `set_tracer` must be called before anything builds a client. Two further costs
+  are real and were both paid during Phase 4. A `contextvar` set inside a `@contextmanager`
+  propagates to the caller and must be explicitly restored (`bind_trace_id`), or a direct caller
+  in a loop — the eval runner — files its next row under the previous row's trace. And an async
+  generator's frame runs in whichever task calls `asend`, so a set before a `yield` and a reset
+  after it must be driven by the same task; splitting that across two tasks raises
+  `ValueError: Token was created in a different Context`.
+- **Alternative rejected:** explicit `tracer=` threading. Purer, and it would have made both
+  bugs above impossible — at the cost of a tracing parameter on roughly a dozen retrieval
+  functions, and of a silent gap whenever a new call site omitted it.
+
+### ADR-025 · A streamed answer is the same structured answer, parsed from partial JSON
+
+- **Decision:** `POST /v1/chat` with `stream: true` sends the *same* prompt, constrained to the
+  same `AnswerDraft` schema, to the same model as the buffered path. The provider's deltas are
+  fragments of a JSON object, and the `answer` field is lifted out of the incomplete document as
+  it arrives (`sutra.generation.partial_json`). Citations, confidence and the refusal flag are
+  resolved from the completed object, exactly as in the buffered path.
+- **Why:** the answer is schema-constrained because that is what makes citations verifiable and
+  refusals explicit. Keeping one prompt and one schema means streaming is a transport choice and
+  nothing else, so the eval scoreboard describes both paths. `make eval` measures the buffered
+  form; if the streamed form used a different prompt, the scoreboard would silently describe only
+  half of production.
+- **Alternative rejected:** a prose-shaped `answer.v2` returning markdown with inline `[n]`
+  markers. It streams trivially and needs no partial-JSON reader, and it forks generation into
+  two paths whose quality can drift apart without any test noticing.
+- **Tradeoffs:** a hand-written scanner for one string field of an incomplete JSON document, with
+  JSON escaping (including `\uXXXX` split across deltas) handled by hand. It is deliberately
+  total — truncated input yields less text, never an exception, because a model that stops
+  mid-string produced a short answer rather than a failed request — and it is tested over every
+  single split point of a real draft. It is not a JSON parser and does not need to be: the field
+  is a top-level string in a flat schema, and the complete object is still parsed by the provider.
+- **Consequence:** a stream that ends without the provider's parsed object serves the salvaged
+  text with no citations and zero confidence. There is an answer, and there is no verified
+  provenance for it, and both are true at once.
+
 ---
 
 ## Open questions (resolve in the phase noted)

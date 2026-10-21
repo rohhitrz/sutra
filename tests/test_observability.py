@@ -281,3 +281,40 @@ def test_the_ambient_tracer_is_settable_and_defaults_to_the_no_op():
         assert recorded == ["cache.hit"]
     finally:
         set_tracer(original)
+
+
+# ------------------------------------------------------------- import ordering
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "sutra.observability.tracing",
+        "sutra.cache.semantic",
+        "sutra.retrieval.search",
+        "sutra.llm.client",
+        "sutra.api.app",
+    ],
+)
+def test_no_module_import_order_causes_a_circular_import(first: str):
+    """Guards a cycle this suite could not see.
+
+    `observability.tracing` needs `llm.types` for one annotation, and importing it executes
+    `sutra/llm/__init__.py`, which eagerly imports `llm.client` — which imports
+    `observability.tracing` for `get_tracer`. That is a cycle whenever observability is
+    imported first, and `make cache` hit it while pytest did not: pytest happens to import
+    the client first, and by then `sutra.llm` is fully initialised.
+
+    A subprocess per case, because the guarantee is about a *cold* interpreter — once
+    anything is in `sys.modules` the ordering that breaks is unreachable.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {first}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"importing {first} first failed:\n{result.stderr}"

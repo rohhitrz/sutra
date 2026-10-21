@@ -1,4 +1,4 @@
-"""Langfuse-backed tracing (ADR-007, ADR-023).
+"""Langfuse-backed tracing (ADR-007, ADR-024).
 
 One trace per request; one span per pipeline stage (ARCHITECTURE §2, §10). The Langfuse SDK
 is OpenTelemetry-based, so nesting comes from OTel's own context: a span opened inside
@@ -17,11 +17,24 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from sutra.config import Settings, get_settings
-from sutra.llm.types import GenerationRecord
 from sutra.observability.context import bind_trace_id, get_trace_id
+
+if TYPE_CHECKING:
+    # Under TYPE_CHECKING only, and this is load-bearing rather than tidiness. Importing
+    # `sutra.llm.types` executes `sutra/llm/__init__.py`, which eagerly imports
+    # `sutra.llm.client` — which imports this module for `get_tracer`. Whenever
+    # `observability.tracing` is the first of the two to be imported, that is a cycle:
+    #
+    #     ImportError: cannot import name 'get_tracer' from partially initialized
+    #     module 'sutra.observability.tracing'
+    #
+    # `make cache` found it; the test suite did not, because pytest happens to import the
+    # client first and by then `sutra.llm` is fully initialised. The name is only ever used
+    # in an annotation, and `from __future__ import annotations` keeps those unevaluated.
+    from sutra.llm.types import GenerationRecord
 
 logger = logging.getLogger(__name__)
 

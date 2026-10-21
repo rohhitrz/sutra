@@ -274,7 +274,7 @@ class Settings(BaseSettings):
     cache_similarity_threshold: float = 0.95
     cache_ttl_hours: int = 168
 
-    # ---- Observability (ADR-007, ADR-023) ----
+    # ---- Observability (ADR-007, ADR-024) ----
     langfuse_host: str = "http://localhost:3000"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

@@ -1,4 +1,4 @@
-"""Pull one string field out of a JSON object that is still arriving.
+"""Pull one string field out of a JSON object that is still arriving (ADR-025).
 
 # CONCEPT: Streaming a *structured* output means parsing incomplete JSON. The answer prompt
 # is schema-constrained (`AnswerDraft`: answer, citations, confidence, refused), which is what

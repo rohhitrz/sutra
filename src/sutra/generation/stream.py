@@ -1,4 +1,4 @@
-"""Generating an answer as a stream, without a second answer prompt.
+"""Generating an answer as a stream, without a second answer prompt (ADR-025).
 
 The non-streaming path (`generate_answer`) and this one send **the same prompt, constrained to
 the same schema, to the same model**. The only difference is that the provider's output arrives
