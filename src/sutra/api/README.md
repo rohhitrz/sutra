@@ -29,7 +29,13 @@ in `chat.py`, where the eval runner calls it directly without going through HTTP
   (`generation/partial_json.py`). A prose-shaped second prompt would have streamed more easily
   and forked generation into two paths of different quality, leaving the eval scoreboard
   describing only one of them.
-- **Frames are `meta` → `token`* → `citations` → `done`, or a terminal `error`.** `meta` comes
+- **Frames are `meta` → `token`* → `citations` → `done`, or a terminal `error`**, which is
+  ARCHITECTURE §5's set. Two deliberate departures from §5's description of `meta` as
+  "trace_id, cost, cache_hit": cost is on `done`, because it is unknown until the provider
+  finishes and `meta` is sent before the answer call; and `cache_hit` is structurally `false`
+  until the semantic cache is wired into the turn, sent anyway so the frame's shape is stable
+  for clients.
+- **Ordering.** `meta` comes
   first so a client has the `trace_id` even if the answer fails half way through; `citations`
   come last because resolving passage numbers to real chunks is only possible once the JSON
   object has closed. Past the first byte the status line is gone, so a mid-stream failure

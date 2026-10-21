@@ -358,6 +358,14 @@ async def test_a_streamed_turn_emits_meta_tokens_citations_then_done(
 
     meta = events[0][1]
     assert meta["trace_id"]
+    # ARCHITECTURE §5's shape. `cache_hit` is structurally false until the semantic cache is
+    # wired into the turn; it is sent so a client needs no change when that happens.
+    assert meta["cache_hit"] is False
+    assert meta["index_version"]
+    # Cost is deliberately *not* here: it is unknown until the provider finishes, so it
+    # arrives on `done`.
+    assert "cost" not in meta
+    assert "usage" in events[-1][1]
     session_id = uuid.UUID(meta["session_id"])
     try:
         # The tokens reassemble into exactly the answer — the whole point of option A.

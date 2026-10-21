@@ -703,6 +703,14 @@ Against the live stack, not by inspection:
     but it means a caller that builds an `LLMClient` before `set_tracer` gets the no-op. The
     client defaulting to `get_tracer()` makes that the only remaining way to lose generations.
 
+18. **The `meta` SSE frame departs from ARCHITECTURE §5 in two documented ways.** §5 describes
+    it as "trace_id, cost, cache_hit". Cost is on `done` instead, because `meta` is sent before
+    the answer call and the cost is not known until the provider finishes — a field that is
+    always null at the moment it is sent is worse than one read from the terminal frame. And
+    `cache_hit` is structurally `false`, since the semantic cache is not wired into the turn;
+    it is sent anyway so a client written against §5 needs no change when the cache is turned
+    on. Neither is a spec change, so no ADR — but if §5 is ever revised, revise it to say this.
+
 17. **Span inputs and outputs carry the question and the retrieved passages.** Harmless on a
     fictional corpus and `TRACING_CAPTURE_CONTENT=false` turns it off, but the default is on
     and would be the wrong default for real data.

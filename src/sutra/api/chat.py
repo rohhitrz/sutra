@@ -360,6 +360,18 @@ async def run_chat_turn_stream(
 
         # `meta` first, before any token, so a client has the trace id even if the answer
         # fails half way through — it is the identifier they would quote in a bug report.
+        #
+        # ARCHITECTURE §5 specifies this frame as "trace_id, cost, cache_hit". Two notes on
+        # where this departs from that, deliberately:
+        #
+        # - **Cost is not here, it is on `done`.** It cannot be otherwise: `meta` is emitted
+        #   before the answer call, and the tokens a turn costs are not known until the
+        #   provider finishes. A field that is always null at the only moment it is sent is
+        #   worse than one the client reads from the terminal frame.
+        # - **`cache_hit` is always false today**, because the semantic cache is implemented
+        #   and not wired into the turn (a deliberate, separate decision — see PROGRESS). It
+        #   is sent anyway so the frame's shape is the one §5 promises and a client written
+        #   against it needs no change when the cache is turned on.
         yield sse_frame(
             "meta",
             {
@@ -368,6 +380,7 @@ async def run_chat_turn_stream(
                 "index_version": settings.index_version,
                 "prompt_version": settings.prompt_version_answer,
                 "model": settings.llm_strong,
+                "cache_hit": False,
                 "retrieved_chunk_ids": [c.chunk_id for c in chunks],
             },
         )
