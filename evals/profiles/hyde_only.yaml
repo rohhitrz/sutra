@@ -1,0 +1,43 @@
+# The ablation Phase 3 never ran: HyDE on its own, without query rewriting.
+#
+# Phase 3 measured the rewrite stage twice and neither run isolated it from HyDE.
+#
+#   step 5a  rewrite, no HyDE   byte-identical to step 4, so the stage was called a no-op
+#   step 5b  rewrite + HyDE     kept as `advanced`, credited with +2.8pp
+#
+# There is no HyDE-only row, so the +2.8pp belongs to the pair and `advanced` has been
+# paying for rewriting on the strength of a measurement that never separated them
+# (known issue 19). On the 42-row `advanced-20261021-164336` run the stage produced no extra
+# query at all in 33 of 42 rows, for 42 LLM calls, $0.003 and 112s of model time per run.
+#
+# This profile is `advanced.yaml` with `query_rewrite_enabled: false` and nothing else
+# changed. Read it against a *repeat* of `advanced`, not against the single recorded row:
+# HyDE is a model call in front of the retriever, so recall@k and MRR are stochastic for
+# this family (known issue 3, ±0.4pp and ±0.006 measured).
+#
+# The answer was neutral, so `advanced.yaml` turned the stage off — which makes this file
+# settings-identical to it now. It is kept, like `hyde.yaml` and `multiquery.yaml` before
+# it, because a dropped stage needs the profile that dropped it to stay runnable: this is
+# the file that says which flag was moved and what happened, and `2026-10-21_hyde_only.*`
+# is the report for the configuration `advanced` now carries.
+name: hyde_only
+description: Hybrid RRF retrieval, cross-encoder reranking and HyDE, with query rewriting off.
+
+# Retrieval — identical to advanced.yaml except query_rewrite_enabled.
+top_k: 5
+index_version: 3
+expand_to_parent: true
+retrieval_mode: hybrid
+candidate_k: 20
+rrf_k: 60
+rerank_enabled: true
+rerank_candidates: 20
+query_rewrite_enabled: false
+hyde_enabled: true
+router_enabled: false
+
+# Generation
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

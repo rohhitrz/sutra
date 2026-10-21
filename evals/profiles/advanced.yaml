@@ -7,7 +7,7 @@
 #   step 3  keyword FTS fused with vectors by RRF            kept   +1.2pp, best precision
 #   step 4  cross-encoder rerank over the fused top-20       kept   +1.1pp, MRR +0.035
 #   step 5  HyDE hypothetical-answer probe                   kept   +2.8pp, multi-hop +8.3pp
-#   step 5  multi-query decomposition                        DROPPED  byte-identical results
+#   step 5  query rewriting / multi-query decomposition      DROPPED  neutral, 42 calls/run
 #   step 6  query router + document-type filters             DROPPED  -8.3pp
 #
 # The two drops are not failures of implementation and both are still in the tree, switched
@@ -16,6 +16,23 @@
 # would plausibly matter at scale. Routing lost because on ten documents multi-hop evidence
 # routinely spans document types, so no filter is narrow enough to help and safe enough not
 # to hurt.
+#
+# Query rewriting was *on* in this file for all of Phase 4, because Phase 3 dropped it on a
+# measurement that never separated it from HyDE and this header said it was off. Settled
+# after Phase 4 (known issue 19) by running `hyde_only.yaml` — this profile with the one flag
+# flipped — against a repeat of this one, since the metrics are stochastic for this family:
+#
+#                       advanced (repeat)   hyde_only      delta
+#   recall@5                      78.2%        79.0%      +0.8pp
+#   context recall                83.3%        84.1%      +0.8pp
+#   MRR                           0.570        0.574      +0.004
+#   answer correctness            0.821        0.821           0
+#   faithfulness                  0.988        0.964      -0.024   (inside the ±0.05 band)
+#
+# Neutral, so it is off. What that buys is not the headline cost delta — the two runs met
+# very different prefix-cache warmth (known issue 3b) — but the stage's own measured spend:
+# 42 LLM calls, $0.0030 and 114s of model time per run, for a stage that produced no extra
+# query at all in 33 of 42 rows. Wall clock fell 259s -> 213s.
 #
 # The semantic cache is off here deliberately. It is a latency and cost feature, and leaving
 # it on would let a cache hit stand in for a retrieval the eval is supposed to measure.
@@ -31,7 +48,7 @@ candidate_k: 20
 rrf_k: 60
 rerank_enabled: true
 rerank_candidates: 20
-query_rewrite_enabled: true
+query_rewrite_enabled: false
 hyde_enabled: true
 router_enabled: false
 
