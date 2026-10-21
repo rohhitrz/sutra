@@ -338,3 +338,14 @@ def test_summary_reports_mean_context_units():
 
     assert summary.mean_context_units == 1.0
     assert summary.context_recall == 1.0
+
+
+def test_a_figure_ending_a_clause_is_still_supported():
+    """Regression: `_FIGURE` is greedy over `[\\d,]`, so a figure followed by a comma was
+    captured as `1131,` on the context side and matched nothing. Every comma-terminated figure
+    in the corpus became a false alarm — the same check failing in the opposite direction from
+    the substring bug it replaced."""
+    assert check_figures("It was 1131.", "drowned in Emberwane of 1131, surveying").grounded
+    assert check_figures("He paid 2,750.", "the total came to 2,750, as recorded").grounded
+    # And the strictness it must not lose.
+    assert check_figures("It was 143.", "Frostmark of 1143, and after").unsupported == ["143"]

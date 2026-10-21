@@ -65,8 +65,14 @@ def _figures_in(text: str) -> set[str]:
     longer number, and on this corpus that is not a corner case: the two book years are 1143
     and 1144, so a fabricated `143` or `144` is "supported" by every passage that mentions a
     date. That silently disarms the one check that does not share the judge's blind spots.
+
+    The trailing `.,` strip is not cosmetic. `_FIGURE` is greedy over `[\\d,]`, so a figure that
+    ends a clause — "in Emberwane of 1131, surveying" — is captured as `1131,` and then matches
+    nothing. The answer side has always stripped it; the context side not doing so turned every
+    comma-terminated figure in the corpus into a false alarm, which is the same check failing
+    in the opposite direction.
     """
-    return {match.group(0) for match in _FIGURE.finditer(_canonical(text))}
+    return {match.group(0).rstrip(".,") for match in _FIGURE.finditer(_canonical(text))} - {""}
 
 
 def check_figures(answer: str, context: str) -> GroundingCheck:
