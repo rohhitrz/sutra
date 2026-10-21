@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -30,7 +31,7 @@ from sutra.config import Settings, get_settings
 from sutra.db.engine import get_sessionmaker
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
-from sutra.ingestion.chunk import chunk_document
+from sutra.ingestion.chunk import chunk_document, chunk_document_parent_child
 from sutra.ingestion.embed import Embedder, get_embedder
 from sutra.ingestion.fingerprint import IndexFingerprint, build_fingerprint
 from sutra.ingestion.parse import ParsedDocument, parse_corpus
@@ -209,35 +210,8 @@ async def ingest(
 
         document_ids = await _upsert_documents(session, documents)
 
-        rows: list[dict[str, object]] = []
-        for doc in documents:
-            chunks = chunk_document(
-                doc.body,
-                max_tokens=settings.chunk_tokens,
-                overlap_tokens=settings.chunk_overlap,
-                count_tokens=embedder.count_tokens,
-            )
-            vectors = embedder.embed_passages([c.text for c in chunks])
-            for chunk, vector in zip(chunks, vectors, strict=True):
-                rows.append(
-                    {
-                        "document_id": document_ids[doc.slug],
-                        "index_version": slot,
-                        "parent_id": None,  # flat chunking; parent-child arrives in Phase 3
-                        "chunk_no": chunk.chunk_no,
-                        "text": chunk.text,
-                        "context_prefix": None,  # contextual retrieval arrives in Phase 3
-                        "embedding": vector,
-                        "token_count": chunk.token_count,
-                        "metadata": {
-                            "index_fingerprint": fingerprint.model_dump(),
-                            "doc_slug": doc.slug,
-                            "doc_type": doc.doc_type,
-                            "heading": chunk.heading,
-                            **{k: v for k, v in doc.meta.items() if k != "in_world_dates"},
-                        },
-                    }
-                )
+        build = _parent_child_rows if settings.parent_child_enabled else _flat_rows
+        rows = build(documents, document_ids, settings, embedder, fingerprint, slot)
 
         if rows:
             _validate_row_keys(rows)
@@ -260,6 +234,139 @@ async def ingest(
         documents=len(documents),
         chunks=len(rows),
     )
+
+
+def _base_metadata(
+    doc: ParsedDocument, fingerprint: IndexFingerprint, heading: str | None
+) -> dict[str, object]:
+    return {
+        "index_fingerprint": fingerprint.model_dump(),
+        "doc_slug": doc.slug,
+        "doc_type": doc.doc_type,
+        "heading": heading,
+        **{k: v for k, v in doc.meta.items() if k != "in_world_dates"},
+    }
+
+
+def _flat_rows(
+    documents: list[ParsedDocument],
+    document_ids: dict[str, object],
+    settings: Settings,
+    embedder: Embedder,
+    fingerprint: IndexFingerprint,
+    slot: int,
+) -> list[dict[str, object]]:
+    """One row per chunk, no hierarchy — the Phase 2 shape, and what slot 1 holds."""
+    rows: list[dict[str, object]] = []
+    for doc in documents:
+        chunks = chunk_document(
+            doc.body,
+            max_tokens=settings.chunk_tokens,
+            overlap_tokens=settings.chunk_overlap,
+            count_tokens=embedder.count_tokens,
+        )
+        vectors = embedder.embed_passages([c.text for c in chunks])
+        for chunk, vector in zip(chunks, vectors, strict=True):
+            rows.append(
+                {
+                    "document_id": document_ids[doc.slug],
+                    "index_version": slot,
+                    "parent_id": None,
+                    "chunk_no": chunk.chunk_no,
+                    "text": chunk.text,
+                    "context_prefix": None,  # contextual retrieval arrives in step 2
+                    "embedding": vector,
+                    "token_count": chunk.token_count,
+                    "metadata": _base_metadata(doc, fingerprint, chunk.heading),
+                }
+            )
+    return rows
+
+
+def _parent_child_rows(
+    documents: list[ParsedDocument],
+    document_ids: dict[str, object],
+    settings: Settings,
+    embedder: Embedder,
+    fingerprint: IndexFingerprint,
+    slot: int,
+) -> list[dict[str, object]]:
+    """Parents and children in one slot, children carrying `parent_id`.
+
+    Parent ids are minted here rather than read back from the database after an insert. One
+    insert for both kinds is simpler to reason about than two ordered ones, and it removes the
+    window in which a failure could leave parents committed without their children.
+
+    **Parents are deliberately not embedded.** They exist to be read, not searched: a parent
+    routinely exceeds the embedder's 512-token limit, so embedding one would silently store a
+    vector for its first half and nothing else. `search.py` filters on `embedding IS NOT NULL`,
+    which is what keeps them out of results.
+    """
+    rows: list[dict[str, object]] = []
+    for doc in documents:
+        parents = chunk_document_parent_child(
+            doc.body,
+            strategy=settings.chunk_strategy,
+            parent_tokens=settings.parent_tokens,
+            child_tokens=settings.child_tokens,
+            child_overlap=settings.child_overlap,
+            breakpoint_percentile=settings.semantic_breakpoint_percentile,
+            count_tokens=embedder.count_tokens,
+            embed=embedder.embed_passages,
+        )
+        children = [child for parent in parents for child in parent.children]
+        vectors = embedder.embed_passages([c.text for c in children])
+        vector_by_chunk_no = {
+            child.chunk_no: vector for child, vector in zip(children, vectors, strict=True)
+        }
+
+        for parent in parents:
+            parent_uuid = uuid.uuid4()
+            rows.append(
+                {
+                    "document_id": document_ids[doc.slug],
+                    "index_version": slot,
+                    "id": parent_uuid,
+                    "parent_id": None,
+                    "chunk_no": parent.chunk_no,
+                    "text": parent.text,
+                    "context_prefix": None,
+                    "embedding": None,
+                    "token_count": parent.token_count,
+                    "metadata": {
+                        **_base_metadata(doc, fingerprint, parent.heading),
+                        # The explicit marker. `embedding IS NULL` happens to identify parents
+                        # today, but that is a consequence of how they are used, not a
+                        # declaration of what they are — and a future unembedded child would
+                        # make it wrong.
+                        "is_parent": True,
+                        "child_count": len(parent.children),
+                    },
+                }
+            )
+            for child in parent.children:
+                rows.append(
+                    {
+                        "document_id": document_ids[doc.slug],
+                        "index_version": slot,
+                        # Explicit, like the parent's. `insert().executemany()` builds one
+                        # statement from the first row's keys, so every row in the batch has
+                        # to carry the same ones — a row omitting `id` fails the whole insert.
+                        "id": uuid.uuid4(),
+                        "parent_id": parent_uuid,
+                        "chunk_no": child.chunk_no,
+                        "text": child.text,
+                        "context_prefix": None,
+                        "embedding": vector_by_chunk_no[child.chunk_no],
+                        "token_count": child.token_count,
+                        "metadata": {
+                            **_base_metadata(doc, fingerprint, child.heading),
+                            "is_parent": False,
+                            "parent_chunk_no": parent.chunk_no,
+                        },
+                    }
+                )
+    return rows
 
 
 def _blocked_message(slot: int, occupied: OccupiedSlot, fingerprint: IndexFingerprint) -> str:
@@ -295,13 +402,42 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="replace an occupied index slot")
     parser.add_argument("--index-version", type=int, default=None, help="override the slot")
     parser.add_argument("--corpus-dir", type=Path, default=CORPUS_DIR)
+    # Chunking shape on the command line rather than only in `.env`, so the command that built
+    # a slot is a thing you can paste into PROGRESS and re-run exactly.
+    parser.add_argument(
+        "--parent-child",
+        action="store_true",
+        help="write parent/child chunks instead of flat ones (Phase 3 step 1)",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=["recursive", "semantic"],
+        default=None,
+        help="chunking strategy; defaults to the configured one",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=get_settings().log_level, format="%(levelname)s %(message)s")
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level, format="%(levelname)s %(message)s")
+
+    overrides: dict[str, object] = {}
+    if args.parent_child:
+        overrides["parent_child_enabled"] = True
+    if args.strategy is not None:
+        overrides["chunk_strategy"] = args.strategy
+    if overrides:
+        # `model_copy` would skip the validator that keeps the embedded unit under the 512-token
+        # ceiling, and that check is the whole reason the validator exists.
+        settings = Settings(**{**settings.model_dump(), **overrides})
 
     try:
         summary = asyncio.run(
-            ingest(corpus_dir=args.corpus_dir, force=args.force, index_version=args.index_version)
+            ingest(
+                corpus_dir=args.corpus_dir,
+                force=args.force,
+                index_version=args.index_version,
+                settings=settings,
+            )
         )
     except IngestionBlocked as exc:
         print(f"\nBLOCKED\n{exc}\n", file=sys.stderr)

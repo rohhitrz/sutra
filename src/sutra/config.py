@@ -142,12 +142,39 @@ class Settings(BaseSettings):
     # Chunking parameters. These three are part of the index fingerprint (ADR-021), so changing
     # any of them and re-ingesting into an occupied slot is a hard error rather than a silent
     # re-chunk. Phase 3 adds the "semantic" strategy and the parent-child split.
-    chunk_strategy: Literal["recursive"] = "recursive"
+    # # CONCEPT: Recursive chunking splits on *typography* — headings, blank lines, sentences.
+    # # Semantic chunking splits on *meaning*: embed each sentence, and cut where consecutive
+    # # sentences stop resembling each other. It finds topic shifts that have no markdown
+    # # boundary, which is most of them in prose, at the cost of an embedding pass per sentence
+    # # at ingest time and a boundary set that is no longer a pure function of the text.
+    chunk_strategy: Literal["recursive", "semantic"] = "recursive"
     # # CONCEPT: Chunk size is bounded above by the embedder, not by taste. bge-small truncates at
     # # 512 tokens *silently* — a 900-token chunk embeds only its first 512 and the rest is
     # # invisible to search forever. 400 leaves headroom for Phase 3's contextual prefix.
     chunk_tokens: int = 400
     chunk_overlap: int = 60
+
+    # ---- Parent-child chunking (Phase 3 step 1) ----
+    # # CONCEPT: Parent-child separates the unit you *search* from the unit you *read*. A small
+    # # child embeds precisely — one fact, one vector, little dilution — while the parent gives
+    # # the model enough surrounding text to interpret it. Searching on 800-token sections
+    # # blurs every vector toward the section's average topic; answering from 200-token
+    # # fragments strands facts without their referents. Doing both is the point.
+    # Off by default: slot 1 and the committed baseline are flat, and must stay that way.
+    parent_child_enabled: bool = False
+    # Parents are never embedded, so they are not bound by the embedder's 512-token ceiling.
+    parent_tokens: int = 800
+    child_tokens: int = 200
+    child_overlap: int = 40
+    # # CONCEPT: The breakpoint threshold is a *percentile* of this document's own consecutive
+    # # similarity drops, not an absolute cosine value. Absolute thresholds do not transfer
+    # # between documents: a tightly-written ledger's sentences all resemble each other, and a
+    # # cutoff tuned on narrative prose would either split it everywhere or nowhere.
+    semantic_breakpoint_percentile: int = 90
+
+    # # CONCEPT: Retrieval-time expansion — search the children, then hand the model their
+    # # parents. Without this, parent-child is just small chunks and strictly worse.
+    retrieval_expand_to_parent: bool = False
     # # CONCEPT: k is a recall/precision dial *and* a cost dial — every retrieved chunk is
     # # context the model pays for. 5 matches the Recall@5 column in the PROGRESS scoreboard.
     retrieval_top_k: int = 5
@@ -174,12 +201,29 @@ class Settings(BaseSettings):
         wrong costs nothing visible at ingest time and shows up only as unexplained recall loss,
         which is the worst kind of bug to go looking for.
         """
-        worst_case = self.chunk_tokens + self.chunk_overlap
+        # The embedded unit is the child when parent-child is on, and the flat chunk otherwise.
+        # Parents are deliberately exempt: they are never embedded, which is why they are
+        # allowed to be larger than the model's sequence limit.
+        if self.parent_child_enabled:
+            name_a, size_a = "child_tokens", self.child_tokens
+            name_b, size_b = "child_overlap", self.child_overlap
+        else:
+            name_a, size_a = "chunk_tokens", self.chunk_tokens
+            name_b, size_b = "chunk_overlap", self.chunk_overlap
+
+        worst_case = size_a + size_b
         if worst_case > EMBEDDING_MAX_SEQUENCE_TOKENS:
             msg = (
-                f"chunk_tokens ({self.chunk_tokens}) + chunk_overlap ({self.chunk_overlap}) "
+                f"{name_a} ({size_a}) + {name_b} ({size_b}) "
                 f"= {worst_case} exceeds the embedder's {EMBEDDING_MAX_SEQUENCE_TOKENS}-token "
                 "limit; chunks would be silently truncated"
+            )
+            raise ValueError(msg)
+        if self.parent_child_enabled and self.child_tokens >= self.parent_tokens:
+            msg = (
+                f"child_tokens ({self.child_tokens}) must be smaller than parent_tokens "
+                f"({self.parent_tokens}); equal sizes make the parent-child split a no-op "
+                "that costs a second row per chunk and buys nothing"
             )
             raise ValueError(msg)
         return self

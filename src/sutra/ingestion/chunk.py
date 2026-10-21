@@ -11,9 +11,14 @@
 #      chunk text, so a chunker that normalised whitespace would destroy the measurement.
 #   2. No content is lost: in order, the chunks reconstruct the body up to whitespace at their
 #      edges (each chunk is stripped, so the separators *between* chunks are not preserved).
-#   3. Every chunk is <= `max_tokens + overlap_tokens`, since overlap is prepended after the
-#      budget check. `Settings` enforces that this sum stays under the embedder's 512-token
-#      ceiling, because truncation there is silent rather than an error.
+#   3. Every chunk is <= `max_tokens + overlap_tokens`, plus at most one word. Overlap is
+#      prepended after the budget check, and `_overlap_prefix` takes whole words until it
+#      *reaches* the overlap budget, so it can cross it by part of a word — a 200/40 child can
+#      measure 241 tokens. The slack is stated rather than engineered away because removing it
+#      would change the output of every chunk written so far, including index slot 1, which the
+#      committed eval baseline is pinned to. `Settings` enforces that the sum stays under the
+#      embedder's 512-token ceiling with room to spare, because truncation there is silent
+#      rather than an error.
 """
 
 from __future__ import annotations
@@ -33,7 +38,17 @@ from pydantic import BaseModel
 #       h2+h3 heading capture.
 CHUNKER_VERSION = 1
 
+# The semantic + parent-child path has its own version, kept separate so that slot 1 — the flat
+# recursive index the committed baseline is pinned to — keeps the fingerprint it was written
+# with. One shared counter would have made every semantic-chunker change invalidate an index
+# whose output had not moved by a character.
+#   1 — Phase 3 step 1: sentence embeddings, percentile breakpoints, recursive child split.
+SEMANTIC_CHUNKER_VERSION = 1
+
 TokenCounter = Callable[[str], int]
+# Embeds a batch of texts. Passed in rather than imported so this module keeps knowing nothing
+# about ONNX, fastembed or `Settings` — the same reason `count_tokens` is a parameter.
+TextEmbedder = Callable[[Sequence[str]], list[list[float]]]
 
 # An h2 or h3 at the start of a line. Both levels count because the corpus is not uniform: most
 # documents section on h2 (one place, one person, one year), but the traveller notes use h3 for
@@ -229,3 +244,255 @@ def chunk_document(
             )
         )
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# Semantic chunking + parent-child (Phase 3 step 1)
+# ---------------------------------------------------------------------------
+
+# Sentence end: terminal punctuation, then whitespace. Kept deliberately simple — the corpus is
+# plain English prose and markdown. An abbreviation ("No. 14") splits here wrongly, which costs
+# a boundary in the wrong place and nothing else: the pieces are re-merged by similarity
+# immediately afterwards, so a spurious split usually disappears.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+class ParentChunk(BaseModel):
+    """A context-sized passage and the search-sized children cut from it.
+
+    # CONCEPT: Parent-child chunking. The child is what gets embedded and searched; the parent
+    # is what the model reads. Small children keep a vector about one thing, which is what makes
+    # retrieval precise. Large parents keep the sentence that explains what that thing refers
+    # to, which is what makes the answer correct. Retrieval-time expansion (`retrieval/expand`)
+    # is the step that connects them, and without it this is just small chunks.
+    """
+
+    chunk_no: int
+    text: str
+    token_count: int
+    heading: str | None = None
+    start_char: int
+    end_char: int
+    children: list[Chunk] = []
+
+
+def split_sentences(text: str) -> list[str]:
+    """Split into sentences, keeping every character.
+
+    `"".join(result) == text` must hold: these pieces are reassembled into chunks, and chunk
+    text has to stay a verbatim slice of the document (invariant 1).
+    """
+    if not text:
+        return []
+    pieces: list[str] = []
+    cursor = 0
+    for match in _SENTENCE_END.finditer(text):
+        pieces.append(text[cursor : match.end()])
+        cursor = match.end()
+    if cursor < len(text):
+        pieces.append(text[cursor:])
+    return pieces
+
+
+def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _percentile(values: Sequence[float], percentile: float) -> float:
+    """Linear-interpolated percentile. Written out rather than pulled from numpy: this is four
+    lines, and the dependency would be carried for them alone."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * (percentile / 100.0)
+    low = int(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def semantic_breakpoints(
+    sentences: Sequence[str], embed: TextEmbedder, *, percentile: int
+) -> set[int]:
+    """Indices where a new chunk should start, found by similarity between neighbours.
+
+    # CONCEPT: Embed every sentence, measure cosine similarity between each adjacent pair, and
+    # cut where that similarity falls furthest. A topic shift shows up as a trough: the sentence
+    # that introduces the ledger does not resemble the sentence that closed the travel notes.
+    #
+    # The threshold is a percentile of *this document's own* distances, never an absolute
+    # cosine. Absolute thresholds do not transfer between documents — a ledger's rows all
+    # resemble each other and a cutoff tuned on prose would split it at every row or not at all.
+    """
+    if len(sentences) < 2:
+        return set()
+
+    vectors = embed(list(sentences))
+    distances = [1.0 - _cosine(vectors[i], vectors[i + 1]) for i in range(len(vectors) - 1)]
+    threshold = _percentile(distances, percentile)
+    # `>` not `>=`: when every distance is identical (a uniform ledger), the percentile equals
+    # all of them, and `>=` would break between every single sentence.
+    return {i + 1 for i, distance in enumerate(distances) if distance > threshold}
+
+
+def _group_by_breakpoints(
+    sentences: Sequence[str], breakpoints: set[int], max_tokens: int, count: TokenCounter
+) -> list[str]:
+    """Join sentences into groups, cutting only at breakpoints — or at the budget.
+
+    A breakpoint is a *permitted* place to cut, not a required one. Splitting at every one of
+    them produces far more, far smaller pieces than `max_tokens` asks for: on this corpus the
+    90th percentile fires roughly every four sentences, which would make a "parent" barely
+    larger than a child and leave the whole parent-child split buying nothing. So groups are
+    merged greedily up to the budget, and the breakpoints decide only *where* the cuts land.
+
+    The budget still wins when a run of closely-related sentences overflows it, because an
+    oversized parent is a worse failure than a cut in a slightly wrong place.
+    """
+    groups: list[str] = []
+    current = ""
+    for index, sentence in enumerate(sentences):
+        if not current:
+            current = sentence
+            continue
+        candidate = current + sentence
+        at_breakpoint = index in breakpoints
+        over_budget = count(candidate) > max_tokens
+        # Cut at a breakpoint only once the group is substantial enough to be worth closing;
+        # otherwise a document whose every sentence is a breakpoint yields one chunk per
+        # sentence, which is the failure this function exists to avoid.
+        if over_budget or (at_breakpoint and count(current) >= max_tokens // 2):
+            groups.append(current)
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _parent_pieces(
+    body: str,
+    *,
+    strategy: str,
+    parent_tokens: int,
+    breakpoint_percentile: int,
+    count: TokenCounter,
+    embed: TextEmbedder | None,
+    separators: Sequence[str],
+) -> list[str]:
+    """The parent-sized pieces of a document, by the configured strategy.
+
+    Both strategies are capped at `parent_tokens`. The semantic one finds its boundaries by
+    meaning and then obeys the budget; the recursive one obeys the budget and finds boundaries
+    by typography. That is the whole difference, and it is what the eval measures.
+    """
+    if strategy == "semantic":
+        if embed is None:
+            msg = "chunk_strategy='semantic' needs an embedder; none was passed"
+            raise ValueError(msg)
+        sentences = split_sentences(body)
+        breakpoints = semantic_breakpoints(sentences, embed, percentile=breakpoint_percentile)
+        pieces = _group_by_breakpoints(sentences, breakpoints, parent_tokens, count)
+        # A single sentence can still exceed the budget; fall back to the recursive splitter
+        # for those rather than emitting an oversized parent.
+        fitted: list[str] = []
+        for piece in pieces:
+            fitted.extend(_recurse(piece, separators, parent_tokens, count))
+        return fitted
+    return _recurse(body, separators, parent_tokens, count)
+
+
+def chunk_document_parent_child(
+    body: str,
+    *,
+    strategy: str = "semantic",
+    parent_tokens: int,
+    child_tokens: int,
+    child_overlap: int = 0,
+    breakpoint_percentile: int = 90,
+    count_tokens: TokenCounter | None = None,
+    embed: TextEmbedder | None = None,
+    separators: Sequence[str] = DEFAULT_SEPARATORS,
+) -> list[ParentChunk]:
+    """Chunk one document body into parents, each holding its own children.
+
+    `chunk_no` is assigned across the whole document in reading order — parent, then its
+    children, then the next parent — so the citation handle `doc_slug#chunk_n` stays unique and
+    roughly ordered, which is what makes a report readable.
+
+    The three invariants at the top of this module still hold, for parents and children alike:
+    every `text` is a verbatim contiguous slice of the body, nothing is dropped, and no child
+    exceeds `child_tokens + child_overlap`. Parents are exempt from the embedder's ceiling
+    because they are never embedded.
+    """
+    count = count_tokens or estimate_tokens
+    stripped = body.strip("\n")
+    if not stripped.strip():
+        return []
+
+    base_offset = body.index(stripped)
+    pieces = _parent_pieces(
+        stripped,
+        strategy=strategy,
+        parent_tokens=parent_tokens,
+        breakpoint_percentile=breakpoint_percentile,
+        count=count,
+        embed=embed,
+        separators=separators,
+    )
+
+    parents: list[ParentChunk] = []
+    chunk_no = 0
+    cursor = 0
+    for piece in pieces:
+        start = cursor
+        cursor += len(piece)
+        parent_text = piece.strip()
+        if not parent_text:
+            continue
+
+        # Children are cut from the parent's text, not from the document, so a child can never
+        # straddle a parent boundary — which would make expansion ambiguous.
+        parent_no = chunk_no
+        chunk_no += 1
+        children: list[Chunk] = []
+        for child in chunk_document(
+            piece,
+            max_tokens=child_tokens,
+            overlap_tokens=child_overlap,
+            count_tokens=count,
+            separators=separators,
+        ):
+            children.append(
+                child.model_copy(
+                    update={
+                        "chunk_no": chunk_no,
+                        # Child offsets are relative to the parent piece; lift them into
+                        # document coordinates so every chunk's offsets mean the same thing.
+                        "start_char": base_offset + start + child.start_char,
+                        "end_char": base_offset + start + child.end_char,
+                        "heading": _heading_at(stripped, start, cursor),
+                    }
+                )
+            )
+            chunk_no += 1
+
+        parents.append(
+            ParentChunk(
+                chunk_no=parent_no,
+                text=parent_text,
+                token_count=count(parent_text),
+                heading=_heading_at(stripped, start, cursor),
+                start_char=base_offset + start,
+                end_char=base_offset + cursor,
+                children=children,
+            )
+        )
+    return parents

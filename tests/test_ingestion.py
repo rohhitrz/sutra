@@ -17,7 +17,10 @@ from sutra.ingestion.chunk import (
     CHUNKER_VERSION,
     DEFAULT_SEPARATORS,
     chunk_document,
+    chunk_document_parent_child,
     estimate_tokens,
+    semantic_breakpoints,
+    split_sentences,
 )
 from sutra.ingestion.fingerprint import IndexFingerprint, build_fingerprint
 from sutra.ingestion.parse import (
@@ -334,3 +337,122 @@ def test_counting_does_not_disturb_the_embedding_tokenizer():
     model = embedder._ensure_model()
     assert model.model.tokenizer.truncation is not None  # type: ignore[attr-defined]
     assert len(embedder.embed_passages(["waystone " * 4444])[0]) == embedder.dims
+
+
+# ---------------------------------------------------------------------------
+# semantic chunking + parent-child (Phase 3 step 1)
+# ---------------------------------------------------------------------------
+
+
+def _fake_embed(texts):
+    """Vectors in two clusters, keyed by a marker in the text.
+
+    Deterministic and dependency-free: the tests below are about *where the boundaries land*
+    given a similarity signal, not about what a real model thinks is similar.
+    """
+    return [[1.0, 0.0] if "ALPHA" in t else [0.0, 1.0] for t in texts]
+
+
+def test_split_sentences_loses_nothing():
+    """These pieces are reassembled into chunk text, which must stay a verbatim slice."""
+    text = "One thing happened. Then another!  And a third?\nA fourth with no end"
+    pieces = split_sentences(text)
+    assert "".join(pieces) == text
+    assert len(pieces) == 4
+
+
+def test_split_sentences_handles_empty_and_single():
+    assert split_sentences("") == []
+    assert split_sentences("No terminal punctuation") == ["No terminal punctuation"]
+
+
+def test_semantic_breakpoints_land_on_the_topic_shift():
+    sentences = ["ALPHA one. ", "ALPHA two. ", "BETA one. ", "BETA two."]
+    breaks = semantic_breakpoints(sentences, _fake_embed, percentile=50)
+    # The only real shift is between index 1 and 2, so the new chunk starts at 2.
+    assert breaks == {2}
+
+
+def test_semantic_breakpoints_split_nothing_when_everything_is_similar():
+    """A uniform document — the merchant ledger is close to this — must not be cut between
+    every sentence. `>` rather than `>=` against the percentile is what prevents it."""
+    sentences = ["ALPHA one. ", "ALPHA two. ", "ALPHA three. ", "ALPHA four."]
+    assert semantic_breakpoints(sentences, _fake_embed, percentile=90) == set()
+
+
+def test_breakpoints_are_permitted_cuts_not_required_ones():
+    """Regression test for a real mistake made building this.
+
+    Cutting at every breakpoint produced 67 parents averaging ~290 tokens against a budget of
+    800 — a "parent" barely bigger than a child, which makes the whole parent-child split buy
+    nothing. Groups must merge up toward the budget and cut only *at* breakpoints.
+    """
+    body = " ".join(f"ALPHA sentence number {i} with some words in it." for i in range(40))
+    parents = chunk_document_parent_child(
+        body,
+        strategy="semantic",
+        parent_tokens=400,
+        child_tokens=100,
+        embed=_fake_embed,
+        count_tokens=estimate_tokens,
+    )
+    assert len(parents) <= 3, "parents are being cut far below the budget"
+    assert max(p.token_count for p in parents) > 100, "no parent is meaningfully parent-sized"
+
+
+def test_parent_child_invariants_on_the_real_corpus():
+    """The three module invariants, for parents and children alike, over all ten documents."""
+    settings = Settings()
+    for path in sorted(Path("data/corpus").glob("*.md")):
+        if path.name == "README.md":
+            continue
+        doc = parse_document(path)
+        parents = chunk_document_parent_child(
+            doc.body,
+            strategy="recursive",  # no embedder needed, and the invariants are strategy-free
+            parent_tokens=settings.parent_tokens,
+            child_tokens=settings.child_tokens,
+            child_overlap=settings.child_overlap,
+            count_tokens=estimate_tokens,
+        )
+        assert parents, f"{doc.slug} produced no parents"
+
+        numbers = [p.chunk_no for p in parents] + [c.chunk_no for p in parents for c in p.children]
+        assert len(numbers) == len(set(numbers)), f"{doc.slug} reused a chunk_no"
+
+        for parent in parents:
+            assert parent.text in doc.body, f"{doc.slug} parent text is not a verbatim slice"
+            assert parent.token_count <= settings.parent_tokens
+            for child in parent.children:
+                assert child.text in doc.body, f"{doc.slug} child text is not a verbatim slice"
+                # The documented bound: budget plus overlap, plus at most one word of slack.
+                assert child.token_count <= settings.child_tokens + settings.child_overlap + 20
+
+
+def test_children_are_cut_from_their_own_parent():
+    """A child straddling a parent boundary would make expansion ambiguous — the retrieved
+    evidence would sit partly outside the passage the model is handed."""
+    body = "\n\n".join(f"## Section {i}\n\n" + ("word " * 300) for i in range(4))
+    parents = chunk_document_parent_child(
+        body,
+        strategy="recursive",
+        parent_tokens=400,
+        child_tokens=100,
+        count_tokens=estimate_tokens,
+    )
+    for parent in parents:
+        for child in parent.children:
+            assert child.text.strip() in parent.text or parent.text in child.text
+
+
+def test_semantic_strategy_requires_an_embedder():
+    """Failing loudly beats silently falling back to recursive and writing an index whose
+    fingerprint claims it is semantic."""
+    with pytest.raises(ValueError, match="needs an embedder"):
+        chunk_document_parent_child(
+            "Some text. More text.",
+            strategy="semantic",
+            parent_tokens=400,
+            child_tokens=100,
+            count_tokens=estimate_tokens,
+        )

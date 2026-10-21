@@ -15,7 +15,7 @@ import json
 from pydantic import BaseModel
 
 from sutra.config import Settings
-from sutra.ingestion.chunk import CHUNKER_VERSION
+from sutra.ingestion.chunk import CHUNKER_VERSION, SEMANTIC_CHUNKER_VERSION
 from sutra.ingestion.parse import ParsedDocument, corpus_hash
 
 
@@ -31,6 +31,24 @@ class IndexFingerprint(BaseModel):
     chunker_version: int
     embedding_model: str
     corpus_hash: str
+
+    # Parent-child / semantic parameters (Phase 3 step 1). All default to None, and a flat
+    # recursive index leaves them None.
+    #
+    # Defaulting rather than requiring them is what keeps **slot 1 idempotent**. The stored
+    # fingerprint is a dict, and `digest` is recomputed from the parsed model on both sides of
+    # the comparison — so a slot written before these fields existed parses with them as None
+    # and produces exactly the digest a flat ingest computes today. Making them required would
+    # have turned every pre-existing slot into an "older schema" refusal, and the committed
+    # baseline's index would have had to be rebuilt to say nothing new.
+    parent_child: bool | None = None
+    parent_tokens: int | None = None
+    child_tokens: int | None = None
+    child_overlap: int | None = None
+    semantic_breakpoint_percentile: int | None = None
+    # Versioned separately from `chunker_version` so a change to the semantic path cannot
+    # invalidate a flat index whose output has not moved.
+    semantic_chunker_version: int | None = None
 
     @property
     def digest(self) -> str:
@@ -49,6 +67,7 @@ class IndexFingerprint(BaseModel):
 
 
 def build_fingerprint(settings: Settings, documents: list[ParsedDocument]) -> IndexFingerprint:
+    parent_child = settings.parent_child_enabled
     return IndexFingerprint(
         chunk_strategy=settings.chunk_strategy,
         chunk_tokens=settings.chunk_tokens,
@@ -56,4 +75,17 @@ def build_fingerprint(settings: Settings, documents: list[ParsedDocument]) -> In
         chunker_version=CHUNKER_VERSION,
         embedding_model=settings.embedding_model,
         corpus_hash=corpus_hash(documents),
+        # Left None when flat, so a flat fingerprint is byte-identical to one computed before
+        # these fields existed. Recording `parent_tokens` on an index that has no parents would
+        # make two identical indexes look different.
+        parent_child=parent_child or None,
+        parent_tokens=settings.parent_tokens if parent_child else None,
+        child_tokens=settings.child_tokens if parent_child else None,
+        child_overlap=settings.child_overlap if parent_child else None,
+        semantic_breakpoint_percentile=(
+            settings.semantic_breakpoint_percentile
+            if parent_child and settings.chunk_strategy == "semantic"
+            else None
+        ),
+        semantic_chunker_version=SEMANTIC_CHUNKER_VERSION if parent_child else None,
     )
