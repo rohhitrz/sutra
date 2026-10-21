@@ -4,7 +4,7 @@
 
 ## Current phase
 **Phase 3 — Advanced retrieval + routing + semantic cache** · Status: 🟨 in progress
-(review fixes landed, baseline re-recorded, **step 1 of 7 done**; step 2 next)
+(**steps 1–2 of 7 done**; step 3 — FTS + RRF hybrid — next)
 
 ## Phase status
 
@@ -28,9 +28,15 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Date | Config / change | Recall@5 | **Context recall** | MRR | Faithfulness | Answer correctness | p50 latency | Cost/query |
 |---|---|---|---|---|---|---|---|---|
-| 2026-10-20 | ~~`naive` baseline, as first recorded~~ — **superseded**, see below | 61.9% | — | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
-| 2026-10-20 | **baseline** — `naive`, vector-only, k=5, answer.v1 (harness fixes applied) | 61.9% | 61.9% | 0.492 | 1.000 | 0.821 | 3157 ms | $0.00055 |
-| 2026-10-21 | **step 1** — `semantic`, parent-child + expansion, slot 2 | 63.9% | **76.2%** | 0.437 | 0.976 | 0.786 | 2824 ms | $0.00095 |
+| 2026-10-20 | ~~`naive` baseline, as first recorded~~ — **superseded** | 61.9% | — | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
+| 2026-10-21 | **baseline** — `naive`, vector-only, k=5, answer.v1, slot 1 | 61.9% | 61.9% | 0.492 | 0.976 | 0.774 | 2734 ms | $0.00056 |
+| 2026-10-21 | **step 1** — `semantic`, parent-child + expansion, slot 2 | 63.9% | 76.2% | 0.437 | 0.988 | 0.774 | 2747 ms | $0.00056 |
+| 2026-10-21 | **step 2** — `contextual`, + generated prefixes, slot 3 | **69.4%** | **79.8%** | **0.506** | 0.952 | 0.810 | 2529 ms | $0.00086 |
+
+All three rows above were produced by the **same harness code on the same day**, which earlier
+rows were not. That re-run was forced by a bug found in step 2 (the figure check was flagging
+comma-terminated figures — see below), and it is the reason the baseline's figure count and
+judge scores differ from the 2026-10-20 recording.
 
 **Context recall is the column to read across chunking schemes**, and it is new in step 1.
 Recall@5 is measured on the retrieved units, so it moves with their size — slot 2's children
@@ -40,8 +46,8 @@ generator. On the flat baseline the two are identical by construction, which is 
 can carry the number without being re-run.
 
 Also from the current baseline run (`evals/reports/baseline.md`): context precision 19.5%,
-refusal recall 100% (6/6), false refusal 11.1% (4/36), $0.0232 for the whole 42-row run,
-239,276 input tokens (51.2% served from the provider's prefix cache) and 20,702 output.
+hit rate@5 73.8%, refusal recall 100% (6/6), false refusal 11.1% (4/36), 4 rows asserting an
+unsupported figure, $0.0236 for the whole 42-row run at 52% prefix-cache hits.
 
 **Why the baseline was re-recorded.** Three defects in the eval harness were fixed (see the
 review-fix section below), two of which changed what the report says: token totals counted judge
@@ -81,14 +87,47 @@ genuinely do all resemble each other. Dense retrieval cannot distinguish `946` f
 all. **This is precisely what step 3's keyword half is for, so numeric recall is the number to
 watch there.** If hybrid does not recover it, the parent-child child size is the thing to revisit.
 
-Judges moved within the noise band (faithfulness 1.000 → 0.976, correctness 0.821 → 0.786) and
-should not be read. Unsupported-figure rows fell 8 → 6. False refusals rose 4 → 5.
+Judges moved within the noise band and should not be read. Cost rose ~12% cache-neutral, from
+longer context passages.
 
-**Cost: +16.4%, not the +72% the raw numbers show.** The reported $0.0232 → $0.0399 is mostly
-prefix-cache warmth (51.2% cached against 0%). Priced at list rate on both sides the real
-increase is 16.4%, from longer context passages: 2,530 → 3,114 input tokens per answer call.
-This is the first time the `total_cached_tokens` field added during the review fixes earned
-its keep.
+### Step 2 — contextual retrieval prefixes (slot 3, `contextual.yaml`)
+
+**Verdict: kept, and the best configuration so far.** A fast model writes 1–2 sentences per
+child saying what the passage is and where it sits; that prefix is prepended before embedding
+and before the tsvector, while the stored chunk text stays verbatim.
+
+It is the strongest single result in the project so far, and it **repaired step 1's
+regressions rather than trading against them**:
+
+| | naive | step 1 | step 2 |
+|---|---|---|---|
+| Context recall | 61.9% | 76.2% | **79.8%** |
+| Recall@5 | 61.9% | 63.9% | **69.4%** |
+| MRR | 0.492 | 0.437 | **0.506** |
+| Hit rate@5 | 73.8% | 73.8% | **81.0%** |
+| Context precision | 19.5% | 17.6% | 19.5% |
+| Passages to model | 5.0 | 4.0 | **3.6** |
+| False refusals | 4 | 4 | **3** |
+
+**MRR recovered past the baseline** (0.437 → 0.506), and **numeric context recall came all the
+way back**: 86.1% → 72.2% → 86.1%. Step 1's notes predicted step 3's keyword half would be
+needed for that; the prefix did it instead, by giving a bare ledger row back the words naming
+what it is a row of. Routing — the second-weakest baseline category — is up 22.2pp on context
+recall.
+
+Context recall by category, step 2 against the baseline: single-hop +33.3, routing +22.2,
+unanswerable +16.7, temporal +14.3, multi-hop +10.4, numeric unchanged.
+
+**The one trade-off: multi-hop fell back from step 1's 60.4% to 47.9%** (still +10.4 over
+baseline). The obvious hypothesis — prefixes pull every chunk toward its document's general
+topic, concentrating results in fewer documents — is only half supported: mean distinct
+documents per row does drop (3.40 → 2.88), but on multi-hop rows specifically it barely moves
+(3.50 → 3.38). So the cause is **not established**. Worth revisiting at step 4 (rerank) and
+step 5 (multi-query), both of which bear directly on it.
+
+**Cost: +6% cache-neutral** ($0.0348 → $0.0368 at list rate), plus a one-off ingestion cost of
+104 fast-model calls. Re-ingestion is free: prefixes are cached by a hash of prompt version,
+document and chunk text.
 
 Weakest categories by recall@5 in the baseline: multi-hop 37.5%, routing 44.4%. Strongest:
 numeric 86.1%.
@@ -282,12 +321,18 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
    judges against the ~10 hand-labelled rows ARCHITECTURE §11 asks for.** Until then read
    faithfulness as an upper bound.
 
-   **Sharpened on the corrected baseline.** The judge now returns **1.000 across all 42 rows**
-   while the figure check flags **8 of them**. The two cannot both be right, and the figure
-   check is the one whose reasoning can be inspected. Note also that the figure check only
-   became trustworthy with this round of fixes — it had been clearing any fabrication whose
-   digits appeared inside a longer number, which on a corpus set in 1143/1144 is most
-   three-digit fabrications.
+   **Still true, but the earlier statement of it was overstated.** PROGRESS previously said
+   the judge returned 1.000 while the figure check flagged 8 of 42 rows. The 8 was inflated by
+   a bug in the check itself (it was flagging comma-terminated figures, fixed 2026-10-21); the
+   true count on the baseline is **4 of 42**, against faithfulness 0.976. A judge scoring 0.976
+   on a set containing four answers that assert a figure from nowhere is still a judge not
+   doing its job — but it is a weaker statement than the one recorded before, and the
+   difference was a defect in our own instrument, not in the model.
+
+   The figure check has now been wrong in both directions within two days: first clearing
+   fabrications whose digits sat inside a longer number, then flagging real figures followed by
+   a comma. Both are fixed and both have tests. Treat its absolute counts with the same
+   suspicion as the judge's until `judge_faithfulness.v2` and the hand-labelled rows exist.
 
 3. **Judge scores carry run-to-run noise of at least ±0.05** (measured over five identical runs:
    faithfulness 0.940–1.000, correctness 0.726–0.821). Retrieval metrics are exact. Do not read
@@ -345,20 +390,28 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 committed baseline at `evals/reports/baseline.json`, and its numbers are in the scoreboard
 above. 168 tests, lint and types clean, everything pushed.
 
-**Step 1 is done and kept** (see the scoreboard). **The immediate next step is Phase 3 step 2:
-contextual retrieval prefixes, into index slot 3**, built on top of slot 2's semantic
-parent-child chunking per the carry-forward rule.
+**Steps 1 and 2 are done and kept** (see the scoreboard). **The immediate next step is Phase 3
+step 3: keyword (FTS) search + RRF hybrid**, measured against slot 3 — `contextual.yaml` is the
+current best profile under the carry-forward rule.
 
-The design decision to make before writing step 2: an LLM writes a 1–2 sentence prefix per
-chunk, cached by content hash. The recommendation standing from the approved plan is that the
-prefix is **embedded and indexed but never shown to the generator as citable text** — it is
-model-written, and CLAUDE.md forbids invented lore reaching the corpus surface. The
-`chunks.context_prefix` column already exists for exactly this. Note the call volume: slot 2
-has 104 children, so one prefix each is ~104 fast-model calls, under the 200-call rule but
-worth re-checking if child size shrinks.
+What step 3 needs:
 
-Then step 3 (FTS + RRF hybrid), which is where **numeric recall must recover** — see the step 1
-notes above.
+- `keyword_search()` over the existing `tsv` column with `ts_rank_cd` and
+  `websearch_to_tsquery`. The tsvector is already built from the **contextualised** text, so
+  keyword search gets the prefixes too, with no re-ingest needed.
+- `retrieval/fusion.py` — Reciprocal Rank Fusion, k=60, as a pure function. Easy to unit-test
+  and the clearest single teaching artefact in the phase.
+- `retrieval_mode: vector | keyword | hybrid` in config, plus `rrf_k`.
+- ADR-002's "Postgres FTS is not true BM25" caveat belongs in `retrieval/README.md`.
+- An implementation detail to expect: two concurrent queries cannot share one `AsyncSession`.
+  Either run the vector and keyword halves sequentially or give each its own session.
+
+**The case for step 3 is now weaker than it was**, and that should be said plainly before
+building it. Step 1's numeric regression was the headline argument for keyword search, and
+step 2 already repaired it (numeric context recall is back to the baseline's 86.1%). What is
+left for hybrid to win is exact-token recall on rare proper nouns and figures where dense
+retrieval still has no handle — real, but a smaller target than it looked a day ago. Expect a
+smaller delta, and do not talk it up afterwards if it does not land.
 
 Settled, and not to be re-litigated:
 
@@ -392,6 +445,21 @@ measured against.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — Phase 3 — step 2 done: contextual retrieval prefixes.**
+  A fast model writes 1–2 sentences per chunk situating it in its document, prepended before
+  embedding and tsvector while the stored text stays verbatim; cached by content hash so
+  re-ingestion stays free. **The best result in the project so far**, and it repaired step 1's
+  regressions instead of trading against them: context recall 76.2% → 79.8%, recall@5 63.9% →
+  69.4%, MRR 0.437 → **0.506** (past the baseline), hit rate 73.8% → 81.0%, on 3.6 passages per
+  row. Numeric context recall came all the way back to 86.1% — step 1 predicted step 3's
+  keyword half would be needed for that, and the prefix did it first. Multi-hop fell back from
+  step 1 (60.4% → 47.9%) and the obvious explanation does not hold up, so it is recorded as
+  unexplained. Two bugs found and fixed on the way: the figure check was flagging every
+  comma-terminated figure (which had inflated the baseline's count from 4 to 8, and the
+  known-issue-2 claim with it), and one row's answer call died of reasoning eating the whole
+  token budget, taking the other 41 rows with it. All three scoreboard rows were then re-run
+  on identical harness code. 191 tests, lint clean.
 
 - **2026-10-21 — Phase 3 — step 1 done: semantic chunking + parent-child.**
   Built semantic chunking (sentence embeddings, percentile breakpoints), parent-child chunks

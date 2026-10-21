@@ -29,7 +29,6 @@ Deliberately **not** implemented here, and where each arrives:
 | rank fusion across retrievers (RRF) | Phase 3 step 3 |
 | cross-encoder reranking (`bge-reranker-base`) | Phase 3 step 4 |
 | query rewriting and routing | Phase 3 steps 5–6 |
-| contextual prefixes | Phase 3 step 2 |
 | metadata filters, ACL enforcement | Phase 3 step 6 / later |
 
 ### Parent-child, and why the headline metric had to change
@@ -52,10 +51,15 @@ chunking schemes on `context_recall`; compare rankers on `recall@k` and MRR.**
 - **Chunk-size dilution.** At 400 tokens a chunk often spans several wiki sections, so a question
   about one place competes against embeddings averaging several places. Parent-child (step 1) is
   the intended answer, and it worked: context recall 61.9% → 76.2%.
-- **Smaller children cost ranking precision.** Step 1 also moved MRR 0.492 → 0.437 and numeric
-  recall 86.1% → 50.0%. More, shorter units means a denser field of near-identical candidates —
-  worst on the merchant ledger, whose rows genuinely do all resemble each other. Dense retrieval
-  cannot tell `946` from `1,034` at all; that is what step 3's keyword half is for.
+- **Smaller children cost ranking precision — until the chunks carry their context.** Step 1
+  moved MRR 0.492 → 0.437 and numeric context recall 86.1% → 72.2%: more, shorter units make a
+  denser field of near-identical candidates, worst on the merchant ledger whose rows genuinely
+  do all resemble each other. Step 2's generated prefixes repaired both (MRR 0.506, numeric
+  back to 86.1%) by giving a bare ledger row back the words naming what it is a row of. The
+  lesson is that small chunks and contextual prefixes are closer to one technique than two.
+- **Dense retrieval still cannot tell `946` from `1,034`.** Exact-token recall on rare proper
+  nouns and figures is what the keyword half of step 3 is for — a real gap, but a smaller one
+  than it looked before step 2 closed the numeric regression.
 - **The HNSW index is not exercised at this scale.** With 49 chunks the planner filters on
   `index_version` and sorts rather than using the vector index (confirmed with `EXPLAIN`). The
   index is correct and will matter at volume, but nothing in this project tests the

@@ -75,3 +75,40 @@ SELECT index_version, count(*), max(token_count) FROM chunks GROUP BY 1;
 SELECT metadata->'index_fingerprint' FROM chunks LIMIT 1;
 SELECT count(*) FROM chunks WHERE tsv @@ to_tsquery('english', 'waystones');  -- stemming
 ```
+
+## Contextual retrieval (Phase 3 step 2)
+
+`contextualize.py` asks a fast model to write one or two sentences situating each chunk in its
+document, and that prefix is prepended before the embedding and the tsvector are built.
+
+The problem it solves is a chunk that cannot be found when read alone. "He paid the toll at the
+nineteenth" is unambiguous in its chapter and nearly unsearchable out of it — no name, no year,
+no road — so its vector sits nowhere near the question that wants it. No amount of retriever
+tuning fixes a vector that never carried the subject.
+
+**What is indexed and what is stored are deliberately different.** `chunks.text` keeps the
+verbatim source slice; only the embedding and the tsvector see `prefix + text`. That is what
+lets citations quote the source and lets the eval match its 72 verbatim quotes against an index
+that searched something else.
+
+**The prefix is never shown to the answering model as citable text.** It is model-written, and
+the corpus is the only source of truth for story facts — an invented sentence would otherwise
+become a retrievable claim about a world where it is not true. The prompt forbids adding any
+fact not already present, and all 104 generated prefixes were audited with the eval's figure
+check: none asserts a figure absent from its source document.
+
+**Caching is not an optimisation here, it is what makes ingestion idempotent.** The key is a
+hash of (prompt version, document slug, chunk text), read back out of any index slot, so
+re-running `make ingest` on an unchanged corpus costs nothing. Without it ADR-021's promise
+that re-running is free would be true about rows and false about money. The prompt version is
+in the key because a rewritten prompt writes different prefixes — reusing one across versions
+would put two configurations in a single slot.
+
+Calls are issued grouped by document, so the provider's prefix cache sees the same
+multi-thousand-token document block on consecutive requests. This is the first place in Sutra
+where prompt caching actually pays: the stable block is finally over the 1024-token minimum
+that made it inert in Phase 2 (known issue 7).
+
+```bash
+python -m sutra.ingestion.run --index-version 3 --parent-child --strategy semantic --contextual
+```
