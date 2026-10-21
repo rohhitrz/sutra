@@ -43,7 +43,7 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment: &langfuse-env
@@ -69,13 +69,18 @@ services:
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       # Auto-provision an org, project and user so Phase 4 gets deterministic API keys
       # instead of a manual click-through. Local only.
+      #
+      # The email must be a real-looking address: Langfuse validates it with zod, and
+      # `dev@localhost` is rejected ("Invalid environment variables") because it has no TLD.
+      # The container then crash-loops on every request, which is a startup failure that
+      # `docker compose config` cannot see — it only type-checks the compose file.
       LANGFUSE_INIT_ORG_ID: sutra
       LANGFUSE_INIT_ORG_NAME: Sutra
       LANGFUSE_INIT_PROJECT_ID: sutra
       LANGFUSE_INIT_PROJECT_NAME: Sutra
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-sutra-local}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-sutra-local}
-      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-dev@localhost}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-dev@sutra.local}
       LANGFUSE_INIT_USER_NAME: Dev
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-localdevpassword}
 
@@ -91,7 +96,7 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
     environment: *langfuse-env
 
   langfuse-postgres:
@@ -142,8 +147,14 @@ services:
       timeout: 5s
       retries: 10
 
+  # Langfuse v3+ uploads every ingestion event to blob storage before the worker reads it,
+  # so an S3-compatible store is required, not optional.
+  #
+  # The image is Chainguard's, not `minio/minio`, because MinIO's Docker Hub repository now
+  # refuses anonymous pulls ("denied: requested access to the resource is denied"). Langfuse
+  # upstream moved to this image for the same reason. Nothing else here needed changing.
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio
     profiles: ["observability"]
     restart: unless-stopped
     entrypoint: sh
@@ -156,6 +167,11 @@ services:
       - "9091:9001"
     volumes:
       - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   sutra_postgres_data:
