@@ -17,6 +17,7 @@ from sutra.config import Settings, get_settings
 from sutra.generation.schema import Answer, AnswerDraft, Citation
 from sutra.llm.client import LLMClient
 from sutra.llm.types import Message
+from sutra.observability.tracing import stage
 from sutra.prompts import Prompt, PromptLoader
 from sutra.retrieval.search import RetrievedChunk
 
@@ -180,21 +181,39 @@ async def generate_answer(
     temperature = prompt.meta.get("temperature")
 
     started = time.perf_counter()
-    response = await client.structured(
-        messages,
-        AnswerDraft,
-        role="strong",
-        max_output_tokens=MAX_ANSWER_TOKENS,
-        temperature=float(temperature) if isinstance(temperature, int | float) else None,
-    )
-    elapsed_ms = (time.perf_counter() - started) * 1000
+    with stage(
+        "generate",
+        kind="span",
+        input={"question": question, "passages": len(chunks)},
+        metadata={"prompt_version": prompt.qualified_version},
+    ) as span:
+        response = await client.structured(
+            messages,
+            AnswerDraft,
+            role="strong",
+            max_output_tokens=MAX_ANSWER_TOKENS,
+            temperature=float(temperature) if isinstance(temperature, int | float) else None,
+            stage="answer",
+            prompt_version=prompt.qualified_version,
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000
 
-    draft = response.parsed
-    if not isinstance(draft, AnswerDraft):
-        msg = f"structured call returned {type(draft).__name__}, expected AnswerDraft"
-        raise TypeError(msg)
+        draft = response.parsed
+        if not isinstance(draft, AnswerDraft):
+            msg = f"structured call returned {type(draft).__name__}, expected AnswerDraft"
+            raise TypeError(msg)
 
-    citations, dropped = resolve_citations(draft, chunks)
+        citations, dropped = resolve_citations(draft, chunks)
+        span.update(
+            output={"answer": draft.answer, "refused": draft.refused},
+            metadata={
+                "confidence": draft.confidence,
+                "cited": len(citations),
+                # A citation the model invented is the clearest single signal that an answer
+                # made up its provenance, so it goes on the span and not only in the response.
+                "dropped_citations": dropped or None,
+            },
+        )
     return Answer(
         answer=draft.answer.strip(),
         citations=citations,

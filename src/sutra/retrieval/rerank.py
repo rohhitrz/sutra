@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from sutra.config import Settings, get_settings
+from sutra.observability.tracing import stage
 from sutra.retrieval.search import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -112,14 +113,34 @@ async def rerank(
     from sutra.ingestion.contextualize import contextualised_text
 
     passages = [contextualised_text(c.context_prefix, c.text) for c in chunks]
-    scores = await asyncio.to_thread(reranker.scores, query, passages)
-    scored = sorted(
-        zip(chunks, scores, strict=True),
-        # `-score` then `chunk_id` so equal scores order deterministically. An eval harness
-        # has to be reproducible before any of its numbers can be believed.
-        key=lambda pair: (-pair[1], pair[0].chunk_id),
-    )
-    return [
-        chunk.model_copy(update={"score": score, "rank": rank})
-        for rank, (chunk, score) in enumerate(scored[:top_k], start=1)
-    ]
+    with stage(
+        "rerank",
+        kind="span",
+        input={"query": query, "candidates": len(chunks)},
+        metadata={"model": settings.reranker_model, "top_k": top_k},
+    ) as span:
+        scores = await asyncio.to_thread(reranker.scores, query, passages)
+        scored = sorted(
+            zip(chunks, scores, strict=True),
+            # `-score` then `chunk_id` so equal scores order deterministically. An eval harness
+            # has to be reproducible before any of its numbers can be believed.
+            key=lambda pair: (-pair[1], pair[0].chunk_id),
+        )
+        kept = [
+            chunk.model_copy(update={"score": score, "rank": rank})
+            for rank, (chunk, score) in enumerate(scored[:top_k], start=1)
+        ]
+        # How far the reranker moved things is the measure of whether it did anything. A
+        # rerank that returns the fusion order unchanged cost twenty forward passes for
+        # nothing, and that is invisible in a latency number alone.
+        before = {c.chunk_id: i for i, c in enumerate(chunks)}
+        span.update(
+            output={"kept": len(kept), "top_score": kept[0].score if kept else None},
+            metadata={
+                "max_rank_shift": max(
+                    (abs(before[c.chunk_id] - i) for i, c in enumerate(kept)), default=0
+                ),
+                "promoted_from_outside_top_k": sum(1 for c in kept if before[c.chunk_id] >= top_k),
+            },
+        )
+    return kept

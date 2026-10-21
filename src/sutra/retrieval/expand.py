@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
+from sutra.observability.tracing import get_tracer, stage
 from sutra.retrieval.search import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ async def expand_to_parents(
     if not parent_ids:
         return list(chunks)
 
+    tracer = get_tracer()
+
     stmt = (
         select(
             ChunkRow.id,
@@ -58,7 +61,8 @@ async def expand_to_parents(
         .join(DocumentRow, DocumentRow.id == ChunkRow.document_id)
         .where(ChunkRow.id.in_(set(parent_ids)))
     )
-    parents = {str(row.id): row for row in (await session.execute(stmt)).all()}
+    with stage("expand_to_parents", kind="span", input={"children": len(chunks)}):
+        parents = {str(row.id): row for row in (await session.execute(stmt)).all()}
 
     missing = set(parent_ids) - set(parents)
     if missing:
@@ -97,4 +101,17 @@ async def expand_to_parents(
 
     # Ranks are renumbered so they stay contiguous after dedupe. Gaps would make MRR read as
     # though a passage had been retrieved further down than it was.
-    return [chunk.model_copy(update={"rank": rank}) for rank, chunk in enumerate(expanded, 1)]
+    result = [chunk.model_copy(update={"rank": rank}) for rank, chunk in enumerate(expanded, 1)]
+
+    # The collapse ratio is the parent-child thesis in one number: children of one parent
+    # dedupe, so the generator reads fewer, completer passages than the retriever ranked.
+    # Phase 3 measured this at 5.0 -> 4.0; a trace says it per request.
+    tracer.event(
+        "retrieval.expanded",
+        metadata={
+            "children_in": len(chunks),
+            "parents_out": len(result),
+            "missing_parents": len(missing),
+        },
+    )
+    return result

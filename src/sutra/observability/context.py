@@ -52,6 +52,23 @@ def set_trace_id(trace_id: str | None) -> None:
     _trace_id.set(trace_id)
 
 
+@contextmanager
+def bind_trace_id(trace_id: str | None) -> Iterator[None]:
+    """Set the trace id for the duration of a block, then put back what was there.
+
+    Used by the tracer, which learns the id only once the root span is open. Set-and-leave
+    would be enough under a server that runs each request in its own asyncio task (the task
+    gets a copy of the context), but it leaves the id set in whatever context opened the
+    span — so a direct caller in a loop, like the eval runner, would file its next row under
+    the previous row's trace. Restoring is one line and removes the need to reason about it.
+    """
+    token = _trace_id.set(trace_id)
+    try:
+        yield
+    finally:
+        _trace_id.reset(token)
+
+
 def get_request_fields() -> dict[str, Any]:
     return _request_fields.get() or {}
 

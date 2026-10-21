@@ -70,6 +70,24 @@ def test_bind_adds_fields_and_is_a_no_op_outside_a_context():
         assert ctx.get_request_fields()["mode"] == "rag"
 
 
+def test_bind_trace_id_restores_the_previous_value():
+    """The tracer learns the id only once the root span is open, and must not leave it set.
+
+    Set-and-leave survives a server that runs each request in its own asyncio task, but a
+    direct caller in a loop — the eval runner — would file its next row under the previous
+    row's trace.
+    """
+    assert ctx.get_trace_id() is None
+    with ctx.bind_trace_id("from-langfuse"):
+        assert ctx.get_trace_id() == "from-langfuse"
+    assert ctx.get_trace_id() is None
+
+    with ctx.request_context(trace_id="outer"):
+        with ctx.bind_trace_id("inner"):
+            assert ctx.get_trace_id() == "inner"
+        assert ctx.get_trace_id() == "outer"
+
+
 def test_nested_contexts_restore_the_outer_one():
     with ctx.request_context(trace_id="outer"):
         with ctx.request_context(trace_id="inner"):

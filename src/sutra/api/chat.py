@@ -27,6 +27,8 @@ from sutra.generation.answer import generate_answer
 from sutra.generation.schema import Answer
 from sutra.ingestion.embed import Embedder
 from sutra.llm.client import LLMClient
+from sutra.observability.context import request_context
+from sutra.observability.tracing import current_trace_id, get_tracer
 from sutra.prompts import PromptLoader
 from sutra.retrieval.expand import expand_to_parents
 from sutra.retrieval.search import RetrievedChunk, search
@@ -69,6 +71,7 @@ async def _save_message(
     content: str,
     prompt_version: str | None = None,
     token_count: int | None = None,
+    trace_id: str | None = None,
 ) -> uuid.UUID:
     row = MessageRow(
         session_id=session_id,
@@ -76,6 +79,7 @@ async def _save_message(
         content=content,
         prompt_version=prompt_version,
         token_count=token_count,
+        trace_id=trace_id,
     )
     session.add(row)
     await session.flush()
@@ -89,24 +93,84 @@ async def run_chat_turn(
     client: LLMClient | None = None,
     loader: PromptLoader | None = None,
     embedder: Embedder | None = None,
+    tags: list[str] | None = None,
 ) -> ChatResponse:
     """Answer one turn and record it.
 
     Raises `SessionNotFound` when a session id is given that this user cannot use.
+
+    The root span is opened here rather than in the HTTP route, because every client — the
+    eval runner today, MCP and voice later — goes through this function and not through HTTP
+    (ARCHITECTURE §1). Instrumenting the route would leave every other caller untraced.
+    `tags` is how the eval runner groups a run's traces (ARCHITECTURE §11).
     """
+    tracer = get_tracer()
+    with (
+        tracer.request(
+            name="chat",
+            user_id=request.user_id,
+            session_id=str(request.session_id) if request.session_id else None,
+            input={"query": request.query},
+            tags=tags,
+            metadata={"mode": request.mode, "stream": request.stream},
+        ) as root_span,
+        request_context(
+            trace_id=current_trace_id(),
+            user_id=request.user_id,
+            session_id=str(request.session_id) if request.session_id else None,
+            mode=request.mode,
+        ),
+    ):
+        response = await _run_chat_turn_inner(
+            request,
+            settings=settings,
+            client=client,
+            loader=loader,
+            embedder=embedder,
+        )
+        root_span.update(
+            output={"answer": response.answer, "refused": response.refused},
+            metadata={
+                "cited": len(response.citations),
+                "dropped_citations": response.dropped_citations or None,
+                "prompt_version": response.prompt_version,
+                "index_version": response.index_version,
+            },
+        )
+    return response
+
+
+async def _run_chat_turn_inner(
+    request: ChatRequest,
+    *,
+    settings: Settings | None = None,
+    client: LLMClient | None = None,
+    loader: PromptLoader | None = None,
+    embedder: Embedder | None = None,
+) -> ChatResponse:
+    """The turn itself, inside an open root span."""
     settings = settings or get_settings()
     factory = get_sessionmaker()
     # One client for the whole turn: retrieval's model-backed stages and generation share it.
     # Built here rather than defaulted inside each callee, so one request opens one connection
     # pool instead of one per stage that happens to need a model.
     client = client or LLMClient(settings=settings)
+    # Stored on both messages so an answer in the database can be opened as a trace later.
+    # The column has existed since the first migration and has been NULL until now.
+    trace_id = current_trace_id()
 
     # --- phase 1: resolve the session, record the question, retrieve. Short transaction.
     async with factory() as db:
         session_id = await _resolve_session(
             db, session_id=request.session_id, user_id=request.user_id
         )
-        await _save_message(db, session_id=session_id, role="user", content=request.query)
+        await _save_message(
+            db,
+            session_id=session_id,
+            role="user",
+            content=request.query,
+            trace_id=trace_id,
+        )
         chunks: list[RetrievedChunk] = await search(
             request.query, session=db, settings=settings, embedder=embedder, client=client
         )
@@ -130,6 +194,7 @@ async def run_chat_turn(
             content=answer.answer,
             prompt_version=answer.prompt_version,
             token_count=answer.usage.total_tokens,
+            trace_id=trace_id,
         )
         await db.execute(
             update(SessionRow).where(SessionRow.id == session_id).values(last_active_at=func.now())
@@ -137,13 +202,17 @@ async def run_chat_turn(
         await db.commit()
 
     logger.info(
-        "chat.turn session=%s refused=%s chunks=%d cited=%d dropped=%d cost=%s",
-        session_id,
-        answer.refused,
-        len(chunks),
-        len(answer.citations),
-        len(answer.dropped_citations),
-        answer.usage.cost_usd,
+        "chat.turn",
+        extra={
+            "session_id": str(session_id),
+            "refused": answer.refused,
+            "chunks": len(chunks),
+            "cited": len(answer.citations),
+            "dropped": len(answer.dropped_citations),
+            "cost_usd": answer.usage.cost_usd,
+            "latency_ms": answer.latency_ms,
+            "prompt_version": answer.prompt_version,
+        },
     )
 
     return ChatResponse(
@@ -174,4 +243,5 @@ async def run_chat_turn(
         latency_ms=answer.latency_ms,
         retrieved_chunk_ids=[c.chunk_id for c in chunks],
         dropped_citations=answer.dropped_citations,
+        trace_id=trace_id,
     )

@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sutra.config import Settings, get_settings
 from sutra.db.models import SemanticCache
 from sutra.ingestion.embed import Embedder, get_embedder
+from sutra.observability.tracing import get_tracer, stage
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,46 @@ async def lookup(
     settings: Settings | None = None,
     embedder: Embedder | None = None,
 ) -> CacheLookup:
-    """Probe the cache. Never raises: a cache that can fail a request is worse than no cache."""
+    """Probe the cache. Never raises: a cache that can fail a request is worse than no cache.
+
+    The hit/miss event is emitted here rather than at each of the inner function's five
+    return points, so no future early return can forget it. A cache whose hit rate you
+    cannot see is a cache you cannot reason about: the number is the whole justification for
+    the component, and a *wrong* hit is a served-from-the-wrong-question bug that shows up
+    nowhere else.
+    """
     settings = settings or get_settings()
+    # Disabled is not a miss. Emitting one would put a 0% hit rate on a stage that never ran.
     if not settings.semantic_cache_enabled:
         return CacheLookup(hit=False)
 
+    with stage("cache_lookup", kind="span", input={"query": query}) as span:
+        result = await _lookup_inner(
+            query, user_id=user_id, session=session, settings=settings, embedder=embedder
+        )
+        span.update(output=result.model_dump(exclude={"answer"}))
+
+    get_tracer().event(
+        "cache.hit" if result.hit else "cache.miss",
+        metadata={
+            "similarity": result.similarity,
+            "nearest_similarity": result.nearest_similarity,
+            "threshold": settings.cache_similarity_threshold,
+            "cached_query": result.cached_query,
+        },
+    )
+    return result
+
+
+async def _lookup_inner(
+    query: str,
+    *,
+    user_id: str,
+    session: AsyncSession,
+    settings: Settings,
+    embedder: Embedder | None = None,
+) -> CacheLookup:
+    """The probe itself. See `lookup` for why the event lives in the wrapper."""
     embedder = embedder or get_embedder(settings)
     try:
         vector = await asyncio.to_thread(embedder.embed_query, query)

@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from sutra.config import Settings, get_settings
 from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import Message
+from sutra.observability.tracing import stage
 from sutra.prompts import PromptLoader
 
 logger = logging.getLogger(__name__)
@@ -76,13 +77,21 @@ async def transform_query(
     loader = loader or PromptLoader(settings=settings)
     queries = [question]
 
-    async with client_scope(client, settings) as llm:
-        if settings.query_rewrite_enabled:
-            queries.extend(await _rewrite(question, llm, loader, settings))
-        if settings.hyde_enabled:
-            hypothetical = await _hyde(question, llm, loader, settings)
-            if hypothetical:
-                queries.append(hypothetical)
+    with stage("transform_query", kind="span", input={"question": question}) as span:
+        async with client_scope(client, settings) as llm:
+            if settings.query_rewrite_enabled:
+                queries.extend(await _rewrite(question, llm, loader, settings))
+            if settings.hyde_enabled:
+                hypothetical = await _hyde(question, llm, loader, settings)
+                if hypothetical:
+                    queries.append(hypothetical)
+        span.update(
+            output={"queries": queries},
+            metadata={
+                "rewrite_enabled": settings.query_rewrite_enabled,
+                "hyde_enabled": settings.hyde_enabled,
+            },
+        )
 
     # Dedupe case-insensitively while keeping order: a rewrite that returns the question
     # unchanged is the common case for a simple question, and retrieving it twice would
@@ -111,6 +120,8 @@ async def _rewrite(
             role="fast",
             max_output_tokens=MAX_TRANSFORM_TOKENS,
             temperature=prompt.meta.get("temperature"),
+            stage="rewrite",
+            prompt_version=prompt.qualified_version,
         )
     except Exception as exc:
         # Degrade to the original question. A failed rewrite must not fail the request.
@@ -134,6 +145,8 @@ async def _hyde(
             role="fast",
             max_output_tokens=MAX_TRANSFORM_TOKENS,
             temperature=prompt.meta.get("temperature"),
+            stage="hyde",
+            prompt_version=prompt.qualified_version,
         )
     except Exception as exc:
         logger.warning("hyde failed: %s", exc)

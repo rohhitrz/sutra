@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from sutra.config import Settings, get_settings
 from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import Message
+from sutra.observability.tracing import stage
 from sutra.prompts import PromptLoader
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,25 @@ async def route(
     if not settings.router_enabled:
         return RouteDecision(intent="general", source="disabled")
 
+    with stage("route", kind="span", input={"question": question}) as span:
+        decision = await _route_inner(question, client, loader, settings)
+        span.update(
+            output={
+                "intent": decision.intent,
+                "doc_types": list(decision.doc_types) or None,
+                "source": decision.source,
+            }
+        )
+    return decision
+
+
+async def _route_inner(
+    question: str,
+    client: LLMClient | None,
+    loader: PromptLoader | None,
+    settings: Settings,
+) -> RouteDecision:
+    """The routing itself. Split out so the span above reads as one statement."""
     intent = route_by_rule(question)
     source: Literal["rule", "model", "fallback"] = "rule"
 
@@ -129,6 +149,8 @@ async def route(
                     role="fast",
                     max_output_tokens=MAX_ROUTER_TOKENS,
                     temperature=prompt.meta.get("temperature"),
+                    stage="route",
+                    prompt_version=prompt.qualified_version,
                 )
                 parsed = response.parsed
                 intent = parsed.intent if isinstance(parsed, _RouterVerdict) else "general"

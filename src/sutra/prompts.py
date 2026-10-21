@@ -50,6 +50,16 @@ class Prompt(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
+    @property
+    def qualified_version(self) -> str:
+        """`answer.v1` — name and version together.
+
+        What traces record. `version` alone is what goes on a stored message, where the
+        column already sits next to the thing it versions; on a span it would be one `v1`
+        among seven sibling generations, saying nothing about which prompt ran.
+        """
+        return f"{self.name}.{self.version}"
+
     def render(self, /, **variables: object) -> str:
         """Substitute `$variable` placeholders.
 

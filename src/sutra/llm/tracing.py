@@ -1,9 +1,15 @@
 """The tracing hook the LLM client calls.
 
-The protocol lives here, next to its one caller, so `sutra.llm` does not import
-`sutra.observability` — the dependency runs the other way, and the client stays usable with
-no observability stack at all. The Langfuse implementation is
-`sutra.observability.tracing.LangfuseTracer`, which satisfies this protocol (ADR-007).
+The protocol lives here, next to its one caller, so that what the client *needs* from a
+tracer is stated where the client is. The implementations live in
+`sutra.observability.tracing`: `LangfuseTracer` (ADR-007) and a `NoOpTracer` of its own.
+
+`LLMClient` imports `observability.tracing.get_tracer` to default its tracer — a client that
+had to be handed one would report no generations whenever a call site forgot, and a trace
+silently missing its tokens and cost is the hardest kind of gap to notice. There is no import
+cycle: `observability.tracing` depends only on `llm.types`, never on the client.
+
+The `NoOpTracer` here is kept as the explicit "trace nothing" choice for tests.
 """
 
 from __future__ import annotations

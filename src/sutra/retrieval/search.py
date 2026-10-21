@@ -36,6 +36,7 @@ from sutra.config import TSV_CONFIG, Settings, get_settings
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
 from sutra.ingestion.embed import Embedder, get_embedder
+from sutra.observability.tracing import get_tracer, stage
 
 if TYPE_CHECKING:
     from sutra.llm.client import LLMClient
@@ -198,11 +199,14 @@ async def keyword_search(
         .limit(top_k)
     )
 
-    rows = (await session.execute(stmt)).all()
-    return [
-        _to_chunk(row, score=float(row.rank_score), rank=rank)
-        for rank, row in enumerate(rows, start=1)
-    ]
+    with stage("keyword_search", kind="retriever", input={"query": query, "k": top_k}) as span:
+        rows = (await session.execute(stmt)).all()
+        hits = [
+            _to_chunk(row, score=float(row.rank_score), rank=rank)
+            for rank, row in enumerate(rows, start=1)
+        ]
+        span.update(output={"hits": len(hits), "top_score": hits[0].score if hits else None})
+    return hits
 
 
 async def vector_search(
@@ -235,7 +239,11 @@ async def vector_search(
     # # what keeps `/v1/chat` concurrent — and what lets the eval runner's `concurrency: 4`
     # # mean anything, since without it four "parallel" rows queue behind one embedder.
     # # It matters more from Phase 3 on: the cross-encoder reranker is far heavier than this.
-    query_vector = await asyncio.to_thread(embedder.embed_query, query)
+    # The embedding gets its own span: it is CPU-bound ONNX inference on a thread, and it is
+    # the first thing to suspect when a vector search is slow for reasons the database cannot
+    # explain.
+    with stage("embed_query", kind="span", input={"query": query}):
+        query_vector = await asyncio.to_thread(embedder.embed_query, query)
 
     # # CONCEPT: The distance operator has to match the one the index was built with
     # # (`vector_cosine_ops`, ADR-004). Mismatch them and Postgres silently declines the index
@@ -273,10 +281,19 @@ async def vector_search(
         .limit(top_k)
     )
 
-    rows = (await session.execute(stmt)).all()
-    if not rows:
-        logger.warning("no chunks in index slot %d — has `make ingest` run?", slot)
+    with stage(
+        "vector_search", kind="retriever", input={"query": query, "k": top_k, "slot": slot}
+    ) as span:
+        rows = (await session.execute(stmt)).all()
+        if not rows:
+            logger.warning("no chunks in index slot %d — has `make ingest` run?", slot)
+        hits = _rows_to_chunks(rows)
+        span.update(output={"hits": len(hits), "top_score": hits[0].score if hits else None})
+    return hits
 
+
+def _rows_to_chunks(rows: Sequence[Any]) -> list[RetrievedChunk]:
+    """Map vector-search rows onto chunks. Split out so the span above stays readable."""
     return [
         RetrievedChunk(
             chunk_id=str(row.id),
@@ -326,27 +343,55 @@ async def hybrid_search(
     top_k = k if k is not None else settings.retrieval_top_k
     candidates = max(settings.retrieval_candidate_k, top_k)
 
-    dense = await vector_search(
-        query,
-        session=session,
-        k=candidates,
-        index_version=index_version,
-        settings=settings,
-        embedder=embedder,
-        doc_types=doc_types,
-    )
-    lexical = await keyword_search(
-        query,
-        session=session,
-        k=candidates,
-        index_version=index_version,
-        settings=settings,
-        doc_types=doc_types,
-    )
-    logger.debug(
-        "hybrid: %d dense, %d lexical candidates -> top %d", len(dense), len(lexical), top_k
-    )
-    return reciprocal_rank_fusion([dense, lexical], k=settings.rrf_k, limit=top_k)
+    with stage(
+        "hybrid_search", kind="retriever", input={"query": query, "candidates": candidates}
+    ) as span:
+        dense = await vector_search(
+            query,
+            session=session,
+            k=candidates,
+            index_version=index_version,
+            settings=settings,
+            embedder=embedder,
+            doc_types=doc_types,
+        )
+        lexical = await keyword_search(
+            query,
+            session=session,
+            k=candidates,
+            index_version=index_version,
+            settings=settings,
+            doc_types=doc_types,
+        )
+        logger.debug(
+            "hybrid: %d dense, %d lexical candidates -> top %d", len(dense), len(lexical), top_k
+        )
+        with stage("fusion", kind="span", metadata={"rrf_k": settings.rrf_k}) as fusion_span:
+            fused = reciprocal_rank_fusion([dense, lexical], k=settings.rrf_k, limit=top_k)
+            # Which half each surviving result came from is the number that says whether the
+            # keyword side is earning its place on this query, rather than on average.
+            dense_ids = {c.chunk_id for c in dense}
+            lexical_ids = {c.chunk_id for c in lexical}
+            fusion_span.update(
+                output={
+                    "fused": len(fused),
+                    "from_both": sum(
+                        1 for c in fused if c.chunk_id in dense_ids and c.chunk_id in lexical_ids
+                    ),
+                    "dense_only": sum(
+                        1
+                        for c in fused
+                        if c.chunk_id in dense_ids and c.chunk_id not in lexical_ids
+                    ),
+                    "lexical_only": sum(
+                        1
+                        for c in fused
+                        if c.chunk_id in lexical_ids and c.chunk_id not in dense_ids
+                    ),
+                }
+            )
+        span.update(output={"dense": len(dense), "lexical": len(lexical), "fused": len(fused)})
+    return fused
 
 
 async def search(
@@ -378,11 +423,54 @@ async def search(
     settings = settings or get_settings()
     top_k = k if k is not None else settings.retrieval_top_k
     pool = max(settings.rerank_candidates, top_k) if settings.rerank_enabled else top_k
+    tracer = get_tracer()
 
-    # # CONCEPT: Multi-query retrieval. A single embedding cannot sit near two unrelated
-    # # passages at once, so a question needing two facts is asking the retriever to be in two
-    # # places. Issuing one query per fact and fusing the results is the obvious fix, and
-    # # nothing cheaper works — which is why this is the stage aimed at multi-hop.
+    # One parent span for the whole pipeline, so its stages group under it instead of
+    # arriving as a flat row of siblings next to `generate`. The tree shape is the thing you
+    # read a trace for: "retrieval cost 300ms of which the embedding was 250" is a different
+    # statement from six unrelated spans that happen to be adjacent.
+    with stage(
+        "retrieve",
+        kind="retriever",
+        input={"query": query, "k": top_k},
+        metadata={"mode": settings.retrieval_mode, "pool": pool},
+    ) as retrieve_span:
+        hits = await _search_inner(
+            query,
+            session=session,
+            top_k=top_k,
+            pool=pool,
+            index_version=index_version,
+            settings=settings,
+            embedder=embedder,
+            reranker=reranker,
+            client=client,
+            tracer=tracer,
+        )
+        retrieve_span.update(
+            output={
+                "chunks": len(hits),
+                "chunk_ids": [c.chunk_id for c in hits],
+                "top_score": hits[0].score if hits else None,
+            }
+        )
+    return hits
+
+
+async def _search_inner(
+    query: str,
+    *,
+    session: AsyncSession,
+    top_k: int,
+    pool: int,
+    index_version: int | None,
+    settings: Settings,
+    embedder: Embedder | None,
+    reranker: object | None,
+    client: LLMClient | None,
+    tracer: Any,
+) -> list[RetrievedChunk]:
+    """The pipeline itself, inside an open `retrieve` span. See `search` for the contract."""
     from sutra.llm.client import client_scope
     from sutra.retrieval.query_transform import gather_queries
     from sutra.retrieval.router import route
@@ -422,7 +510,23 @@ async def search(
             for q in queries
         ]
         logger.debug("multi-query: %d queries -> pool of %d", len(queries), pool)
-        hits = reciprocal_rank_fusion(per_query, k=settings.rrf_k, limit=pool)
+        with stage("multi_query_fusion", kind="span", metadata={"queries": len(queries)}) as span:
+            hits = reciprocal_rank_fusion(per_query, k=settings.rrf_k, limit=pool)
+            span.update(output={"fused": len(hits)})
+
+    tracer.event(
+        "retrieval.candidates",
+        metadata={
+            "mode": settings.retrieval_mode,
+            "candidates": len(hits),
+            "pool": pool,
+            "top_k": top_k,
+            "doc_type_filter": list(doc_types) or None,
+            "queries": len(queries),
+            "rerank_enabled": settings.rerank_enabled,
+        },
+    )
+
     if not settings.rerank_enabled:
         return hits
 

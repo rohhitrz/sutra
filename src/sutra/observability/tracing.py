@@ -21,7 +21,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from sutra.config import Settings, get_settings
 from sutra.llm.types import GenerationRecord
-from sutra.observability.context import get_trace_id, set_trace_id
+from sutra.observability.context import bind_trace_id, get_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +218,8 @@ class LangfuseTracer:
                 with self._client.start_as_current_observation(
                     name=name, as_type="span", input=self._payload(input), metadata=metadata
                 ) as span:
-                    set_trace_id(self._client.get_current_trace_id())
-                    yield span
+                    with bind_trace_id(self._client.get_current_trace_id()):
+                        yield span
         except Exception:
             # The request itself must survive a broken tracer. Note this catches failures in
             # *tracing*; an exception from the wrapped body propagates through the inner

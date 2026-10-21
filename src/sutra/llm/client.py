@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from sutra.config import LONG_CONTEXT_THRESHOLD_TOKENS, Settings, get_settings
 from sutra.llm.adapters import LLMAdapter, OpenAIAdapter, RawResult
-from sutra.llm.tracing import NoOpTracer, Tracer
+from sutra.llm.tracing import Tracer
 from sutra.llm.types import (
     GenerationRecord,
     LLMResponse,
@@ -36,6 +36,7 @@ from sutra.llm.types import (
     StreamEvent,
     Usage,
 )
+from sutra.observability.tracing import get_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,11 @@ class LLMClient:
             api_key=self._settings.openai_api_key,
             timeout=self._settings.llm_timeout_seconds,
         )
-        self._tracer = tracer or NoOpTracer()
+        # Defaults to the ambient tracer rather than to the no-op. An explicit `tracer=` is
+        # still honoured (tests use it), but the default has to be the working one: a client
+        # built without one would otherwise report no generations at all, and the only
+        # symptom is a trace that is quietly missing its tokens and its cost.
+        self._tracer = tracer if tracer is not None else get_tracer()
 
     async def aclose(self) -> None:
         """Release the adapter's connection pool. Safe on an adapter that does not need it."""
