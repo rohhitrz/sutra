@@ -12,6 +12,7 @@ import logging
 import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from typing import TypeVar
 
 from openai import (
@@ -74,6 +75,12 @@ class LLMClient:
             timeout=self._settings.llm_timeout_seconds,
         )
         self._tracer = tracer or NoOpTracer()
+
+    async def aclose(self) -> None:
+        """Release the adapter's connection pool. Safe on an adapter that does not need it."""
+        closer = getattr(self._adapter, "aclose", None)
+        if closer is not None:
+            await closer()
 
     # ---------------------------------------------------------------- internals
 
@@ -368,3 +375,28 @@ class LLMClient:
             streamed=True,
         )
         yield StreamDone(usage=usage, model=final.model, response_id=final.response_id)
+
+
+@asynccontextmanager
+async def client_scope(
+    client: LLMClient | None, settings: Settings | None = None
+) -> AsyncIterator[LLMClient]:
+    """Yield `client` if the caller supplied one, otherwise a temporary one that gets closed.
+
+    # CONCEPT: Ownership, made explicit. The `client or LLMClient(...)` idiom is convenient and
+    # leaks: every call that falls through to the default builds a fresh provider SDK — and a
+    # fresh HTTP connection pool — that nothing ever closes. One retrieval request was creating
+    # up to two of them, per request, held open until the garbage collector noticed.
+    #
+    # Injecting the client is the real fix, because a pool is meant to be shared across calls,
+    # not created per call. This exists for the paths that are still allowed to run without
+    # one: it keeps the convenience and makes the clean-up unavoidable.
+    """
+    if client is not None:
+        yield client
+        return
+    owned = LLMClient(settings=settings)
+    try:
+        yield owned
+    finally:
+        await owned.aclose()

@@ -24,7 +24,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from sutra.config import Settings, get_settings
-from sutra.llm.client import LLMClient
+from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import Message
 from sutra.prompts import PromptLoader
 
@@ -113,23 +113,26 @@ async def route(
 
     if intent is None:
         try:
-            client = client or LLMClient(settings=settings)
-            loader = loader or PromptLoader(settings=settings)
-            prompt = loader.get("router", settings.prompt_version_router)
-            system, user = prompt.render(question=question).split("<<<USER>>>", 1)
-            response = await client.structured(
-                [
-                    Message(role="system", content=system.strip()),
-                    Message(role="user", content=user.strip()),
-                ],
-                _RouterVerdict,
-                role="fast",
-                max_output_tokens=MAX_ROUTER_TOKENS,
-                temperature=prompt.meta.get("temperature"),
-            )
-            parsed = response.parsed
-            intent = parsed.intent if isinstance(parsed, _RouterVerdict) else "general"
-            source = "model"
+            # `client_scope` rather than `client or LLMClient(...)`: a router that builds its
+            # own provider client must also close it, or every unrouted question leaks a
+            # connection pool. `search()` normally passes one in, so this is the fallback path.
+            async with client_scope(client, settings) as llm:
+                loader = loader or PromptLoader(settings=settings)
+                prompt = loader.get("router", settings.prompt_version_router)
+                system, user = prompt.render(question=question).split("<<<USER>>>", 1)
+                response = await llm.structured(
+                    [
+                        Message(role="system", content=system.strip()),
+                        Message(role="user", content=user.strip()),
+                    ],
+                    _RouterVerdict,
+                    role="fast",
+                    max_output_tokens=MAX_ROUTER_TOKENS,
+                    temperature=prompt.meta.get("temperature"),
+                )
+                parsed = response.parsed
+                intent = parsed.intent if isinstance(parsed, _RouterVerdict) else "general"
+                source = "model"
         except Exception as exc:
             logger.warning("router failed, falling back to general: %s", exc)
             return RouteDecision(intent="general", source="fallback")

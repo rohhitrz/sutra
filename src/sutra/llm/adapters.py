@@ -74,6 +74,10 @@ class LLMAdapter(Protocol):
         timeout: float,
     ) -> RawResult: ...
 
+    # Deliberately *not* on the protocol. An adapter that owns a connection pool offers
+    # `aclose()` and `LLMClient.aclose` finds it by duck-typing; requiring it here would force
+    # every test fake to implement a no-op for a resource it does not hold.
+
 
 def _split_instructions(messages: Sequence[Message]) -> tuple[str | None, list[dict[str, str]]]:
     """The Responses API takes system content as a separate `instructions` argument rather than
@@ -99,6 +103,15 @@ class OpenAIAdapter:
 
     def __init__(self, api_key: str, timeout: float) -> None:
         self._client = AsyncOpenAI(api_key=api_key, timeout=timeout, max_retries=0)
+
+    async def aclose(self) -> None:
+        """Release the underlying HTTP connection pool.
+
+        An `AsyncOpenAI` owns an httpx pool with live sockets. Dropping the reference without
+        closing leaks those until the garbage collector gets to them, which under load means
+        file descriptors accumulating faster than they are reclaimed.
+        """
+        await self._client.close()
 
     @staticmethod
     def _usage_from(response: object) -> tuple[int, int, int, int]:

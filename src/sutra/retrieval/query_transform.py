@@ -31,7 +31,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from sutra.config import Settings, get_settings
-from sutra.llm.client import LLMClient
+from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import Message
 from sutra.prompts import PromptLoader
 
@@ -70,16 +70,19 @@ async def transform_query(
     if not (settings.query_rewrite_enabled or settings.hyde_enabled):
         return [question]
 
-    client = client or LLMClient(settings=settings)
+    # `client_scope` rather than `client or LLMClient(...)`: building a provider client here
+    # and dropping it leaks its connection pool on every transformed query. `search()` passes
+    # one in, so this is the fallback path for a direct caller or a test.
     loader = loader or PromptLoader(settings=settings)
     queries = [question]
 
-    if settings.query_rewrite_enabled:
-        queries.extend(await _rewrite(question, client, loader, settings))
-    if settings.hyde_enabled:
-        hypothetical = await _hyde(question, client, loader, settings)
-        if hypothetical:
-            queries.append(hypothetical)
+    async with client_scope(client, settings) as llm:
+        if settings.query_rewrite_enabled:
+            queries.extend(await _rewrite(question, llm, loader, settings))
+        if settings.hyde_enabled:
+            hypothetical = await _hyde(question, llm, loader, settings)
+            if hypothetical:
+                queries.append(hypothetical)
 
     # Dedupe case-insensitively while keeping order: a rewrite that returns the question
     # unchanged is the common case for a simple question, and retrieving it twice would
@@ -155,9 +158,7 @@ async def gather_queries(
 ) -> list[str]:
     """`transform_query`, but never raising. Retrieval must survive a transform outage."""
     try:
-        return await transform_query(
-            question, client=client, loader=loader, settings=settings
-        )
+        return await transform_query(question, client=client, loader=loader, settings=settings)
     except Exception as exc:
         logger.warning("query transform stage failed entirely: %s", exc)
         return [question]

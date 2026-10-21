@@ -26,7 +26,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
@@ -36,6 +36,9 @@ from sutra.config import TSV_CONFIG, Settings, get_settings
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
 from sutra.ingestion.embed import Embedder, get_embedder
+
+if TYPE_CHECKING:
+    from sutra.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -159,9 +162,12 @@ async def keyword_search(
     # space and different facts in the world. A term index matches the token or it does not,
     # which is exactly the discrimination a rare proper noun or an exact figure needs.
     #
-    # `websearch_to_tsquery` rather than `plainto_tsquery`: it accepts quoted phrases and `or`
-    # the way a person actually types a query, and it never raises on punctuation — a
-    # user-facing parser should not be able to turn a question mark into a 500.
+    # The query is parsed by `_or_tsquery` below rather than by one of Postgres' own parsers.
+    # This comment used to argue for `websearch_to_tsquery` on the grounds that it never raises
+    # on punctuation; that is still a real requirement — a user-facing parser must not be able
+    # to turn a question mark into a 500 — but it is now met by `_or_tsquery` keeping only
+    # word-character runs, because every built-in parser ANDs its terms and this retriever has to OR
+    # them. See `_or_tsquery` for the measurement that forced the change.
     #
     # ADR-002 is honest that this is **not BM25**. `ts_rank_cd` is cover density ranking: it
     # rewards terms appearing close together and knows nothing about inverse document
@@ -352,6 +358,7 @@ async def search(
     settings: Settings | None = None,
     embedder: Embedder | None = None,
     reranker: object | None = None,
+    client: LLMClient | None = None,
 ) -> list[RetrievedChunk]:
     """The configured retrieval pipeline: retrieve, optionally rerank, return the top k.
 
@@ -363,6 +370,10 @@ async def search(
     When reranking is on, retrieval fetches `rerank_candidates` rather than `k`. A reranker can
     only reorder what it is given, so its ceiling is the recall of that pool — handing it five
     results would let it sort five and discover nothing.
+
+    `client` is the LLM client for the stages that need one — routing and the query transforms.
+    Passing the caller's client is strongly preferred: without it each of those stages builds
+    its own provider SDK, with its own connection pool, once per search.
     """
     settings = settings or get_settings()
     top_k = k if k is not None else settings.retrieval_top_k
@@ -372,12 +383,16 @@ async def search(
     # # passages at once, so a question needing two facts is asking the retriever to be in two
     # # places. Issuing one query per fact and fusing the results is the obvious fix, and
     # # nothing cheaper works — which is why this is the stage aimed at multi-hop.
+    from sutra.llm.client import client_scope
     from sutra.retrieval.query_transform import gather_queries
     from sutra.retrieval.router import route
 
-    decision = await route(query, settings=settings)
-    doc_types = decision.doc_types
-    queries = await gather_queries(query, settings=settings)
+    # One client for both model-backed stages, rather than one each. `client_scope` closes it
+    # only when it had to create it, so an injected client outlives this call as it should.
+    async with client_scope(client, settings) as llm:
+        decision = await route(query, settings=settings, client=llm)
+        doc_types = decision.doc_types
+        queries = await gather_queries(query, settings=settings, client=llm)
     if len(queries) == 1:
         hits = await _retrieve(
             query,

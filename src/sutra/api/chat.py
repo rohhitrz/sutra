@@ -96,6 +96,10 @@ async def run_chat_turn(
     """
     settings = settings or get_settings()
     factory = get_sessionmaker()
+    # One client for the whole turn: retrieval's model-backed stages and generation share it.
+    # Built here rather than defaulted inside each callee, so one request opens one connection
+    # pool instead of one per stage that happens to need a model.
+    client = client or LLMClient(settings=settings)
 
     # --- phase 1: resolve the session, record the question, retrieve. Short transaction.
     async with factory() as db:
@@ -104,7 +108,7 @@ async def run_chat_turn(
         )
         await _save_message(db, session_id=session_id, role="user", content=request.query)
         chunks: list[RetrievedChunk] = await search(
-            request.query, session=db, settings=settings, embedder=embedder
+            request.query, session=db, settings=settings, embedder=embedder, client=client
         )
         # Parent expansion reads the database, so it belongs in this transaction rather than
         # opening a second one after the model call.
