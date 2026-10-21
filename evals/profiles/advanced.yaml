@@ -1,0 +1,42 @@
+# The best configuration Phase 3 found. This is the profile Phase 4 onward is measured against.
+#
+# Everything that won, and nothing that did not:
+#
+#   step 1  semantic chunking + parent-child, slot 2 -> 3     kept   context recall +14.3pp
+#   step 2  contextual retrieval prefixes, slot 3            kept   +3.6pp, MRR recovered
+#   step 3  keyword FTS fused with vectors by RRF            kept   +1.2pp, best precision
+#   step 4  cross-encoder rerank over the fused top-20       kept   +1.1pp, MRR +0.035
+#   step 5  HyDE hypothetical-answer probe                   kept   +2.8pp, multi-hop +8.3pp
+#   step 5  multi-query decomposition                        DROPPED  byte-identical results
+#   step 6  query router + document-type filters             DROPPED  -8.3pp
+#
+# The two drops are not failures of implementation and both are still in the tree, switched
+# off. Multi-query changed the candidate pool and the cross-encoder re-sorted it to the same
+# five, because a 20-candidate pool over 104 chunks already holds everything relevant — it
+# would plausibly matter at scale. Routing lost because on ten documents multi-hop evidence
+# routinely spans document types, so no filter is narrow enough to help and safe enough not
+# to hurt.
+#
+# The semantic cache is off here deliberately. It is a latency and cost feature, and leaving
+# it on would let a cache hit stand in for a retrieval the eval is supposed to measure.
+name: advanced
+description: Semantic parent-child chunking with contextual prefixes, hybrid RRF retrieval, cross-encoder reranking, HyDE, and parent expansion.
+
+# Retrieval
+top_k: 5
+index_version: 3
+expand_to_parent: true
+retrieval_mode: hybrid
+candidate_k: 20
+rrf_k: 60
+rerank_enabled: true
+rerank_candidates: 20
+query_rewrite_enabled: true
+hyde_enabled: true
+router_enabled: false
+
+# Generation
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

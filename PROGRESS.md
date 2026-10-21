@@ -3,8 +3,8 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 3 — Advanced retrieval + routing + semantic cache** · Status: 🟨 in progress
-(**steps 1–4 of 7 done**, plus judge v2; step 5 — query transforms — next)
+**Phase 4 — Observability** · Status: ⬜ not started
+(Phase 3 complete: all 7 steps measured, `advanced.yaml` saved)
 
 ## Phase status
 
@@ -13,7 +13,7 @@
 | 0 | Foundation | ✅ done | 2026-10-19 |
 | 1 | Corpus + golden datasets | ✅ done | 2026-10-19 |
 | 2 | Ingestion + naive RAG + eval harness | ✅ done | 2026-10-20 |
-| 3 | Advanced retrieval + routing + semantic cache | 🟨 | 2026-10-20 |
+| 3 | Advanced retrieval + routing + semantic cache | ✅ done | 2026-10-21 |
 | 4 | Observability | ⬜ | |
 | 5 | Generation, context management, memory | ⬜ | |
 | 6 | Guardrails | ⬜ | |
@@ -36,7 +36,11 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-21 | **step 3** — `hybrid`, vector + FTS fused by RRF, slot 3 | **73.0%** | **81.0%** | **0.528** | 0.964 | 0.810 | 2572 ms | $0.00085 |
 | 2026-10-21 | step 3 re-graded by **judge v2** — same retrieval, new judge | 73.0% | 81.0% | 0.528 | 0.893 | 0.750 | 2612 ms | $0.00096 |
 | 2026-10-21 | step 4 — rerank on **bare** chunk text (wrong, kept as evidence) | 69.4% | 76.2% | 0.510 | 0.976 | 0.833 | 3742 ms | $0.00129 |
-| 2026-10-21 | **step 4** — `hybrid_rerank`, cross-encoder on indexed text | **77.8%** | **82.1%** | **0.563** | 0.988 | 0.833 | 3502 ms | $0.00116 |
+| 2026-10-21 | **step 4** — `hybrid_rerank`, cross-encoder on indexed text | 77.8% | 82.1% | 0.563 | 0.988 | 0.833 | 3502 ms | $0.00116 |
+| 2026-10-21 | step 5a — `multiquery`, rewrite + decomposition | 77.8% | 82.1% | 0.563 | 0.988 | 0.845 | 3319 ms | $0.00083 |
+| 2026-10-21 | **step 5b** — `hyde`, hypothetical-answer probe | 79.0% | 84.9% | 0.578 | 0.964 | 0.821 | 3719 ms | $0.00101 |
+| 2026-10-21 | step 6 — `routed`, query router + doc-type filters | 72.2% | 76.6% | 0.567 | 0.988 | 0.821 | 3523 ms | $0.00112 |
+| **2026-10-21** | **`advanced` — the Phase 3 profile** | **77.8%** | **83.7%** | **0.571** | 0.976 | 0.857 | 3550 ms | $0.00091 |
 
 **The faithfulness column changes meaning at the last row.** Rows above it were graded by
 `judge_faithfulness.v1`; from step 4 onward the default is v2, which must quote the span
@@ -245,6 +249,76 @@ second involving temporal or multi-hop.
 
 Cost is flat at list price ($0.0513 → $0.0490); the spend here is latency, not money, because
 the reranker is local.
+
+### Steps 5–7, and what Phase 3 ended up at
+
+**Step 5 — query transforms. HyDE won; multi-query did not, on its own.**
+
+HyDE — embed a hypothetical answer beside the question — was the single largest retrieval gain
+after step 1: context recall 82.1% → 84.9%, hit rate 88.1% → 92.9%, at flat cost. Questions
+and passages are written in different registers, and a fabricated answer sits in the register
+of the thing being searched for. It was also the first real gain on **multi-hop** since step 1
+(47.9% → 56.2%). The draft is embedded and discarded — never shown, never indexed, never
+citable — which is the only basis on which asking a model to invent corpus-shaped text belongs
+in this project.
+
+Multi-query on its own produced **byte-identical retrieval on all 42 rows**. Traced rather
+than assumed: the extra queries do shift the candidate pool (18–20 of 20 overlap), and the
+cross-encoder then re-sorts that pool to the same five. On 104 searchable chunks a
+20-candidate pool already holds what is relevant. **Combined with HyDE it does appear to
+help** (multi-hop 47.9% → 56.2% in `advanced`), but the three HyDE-containing runs returned
+context recall of 82.1 / 83.7 / 84.9 — the generated probe varies between runs — so rewrite's
+individual contribution sits inside that band and **is not separable at this sample size.**
+It is left on in `advanced` because that is the configuration actually measured best, not
+because its value is established.
+
+**Step 6 — query router and metadata filters. Lost, exactly as designed against.**
+Context recall 84.9% → 76.6%, multi-hop −12.4pp, temporal −21.4pp. The asymmetry the module
+was built around is the explanation: a correct narrow route saves a few slots, a wrong one
+hides the answer with no second pass. Rules fire only on unambiguous wording, the classifier
+is told to prefer `general`, the filters are deliberately wider than the obvious answer, and
+`general` applies no WHERE clause — and it still lost, because on ten documents multi-hop
+evidence routinely spans document types. Committed and switched off: it is a real technique
+and the eval is what says not to enable it here.
+
+**Step 7 — semantic cache. The threshold in ADR-012 is unsafe, and no threshold is safe.**
+`make cache` probes for the failure that matters — not hit rate but wrong hits — and found
+one immediately:
+
+| | cosine | |
+|---|---|---|
+| `...tithe rate in 1143?` vs `...1144?` | **0.954** | wrong answer, above threshold |
+| `population of Halvern Reach?` paraphrased | **0.955** | right answer |
+
+One thousandth apart. Raise the threshold and the cache stops working; lower it and it serves
+1143's answer for 1144 — and the corpus changes that rate between books, so the wrong answer
+is plausible. **The fix is not a better threshold.** A hit now also requires both questions to
+mention the same figures: an exact test on precisely the tokens that distinguish
+otherwise-identical questions, and precisely where an embedding is weakest, since `1143` and
+`1144` are neighbours as tokens and unrelated as facts. All six probes resolve correctly, with
+no cross-user leak and no stale version served. The general rule, worth carrying to Phases 5–7:
+*where a soft signal cannot resolve a distinction, put a hard one beside it rather than tuning
+the soft one harder.*
+
+### Phase 3 overall: `naive` → `advanced`
+
+| | naive | advanced | |
+|---|---|---|---|
+| **Context recall** | 61.9% | **83.7%** | **+21.8** |
+| Recall@5 | 61.9% | 77.8% | +15.9 |
+| Hit rate@5 | 73.8% | 90.5% | +16.7 |
+| MRR | 0.492 | 0.571 | +0.079 |
+| Context precision | 19.5% | 21.0% | +1.5 |
+| Passages to the model | 5.0 | 3.9 | −1.1 |
+| False refusals | 4 | 2 | −2 |
+
+By category: routing +55.6, single-hop +41.7, multi-hop +18.8, unanswerable +16.7, numeric
+and temporal unchanged. Latency p50 2734 → 3550 ms (+30%), cost +45% at list price.
+
+**Two categories did not move across the whole phase.** Numeric ended exactly where it
+started (86.1%) having dipped to 50% at step 1 and been recovered twice. Temporal also ended
+at 64.3%, having reached 92.9% at step 3 before step 4 cost it 28.6pp — that regression is
+still unexplained and is the clearest open retrieval question going into Phase 4.
 
 Weakest categories by recall@5 in the baseline: multi-hop 37.5%, routing 44.4%. Strongest:
 numeric 86.1%.
@@ -502,64 +576,54 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 
 ## Next step
 
-**Phase 2 is done and the review fixes are in.** `make ingest && make eval` produces the
-committed baseline at `evals/reports/baseline.json`, and its numbers are in the scoreboard
-above. 168 tests, lint and types clean, everything pushed.
+**Phase 3 is done.** All seven steps are implemented, measured and recorded; `advanced.yaml`
+is the saved best profile and the base for everything after it. Index slot 3 is what it runs
+against. Slots 1 and 2 are kept so earlier rows stay reproducible.
 
-**Steps 1–3 are done and kept** (see the scoreboard). `hybrid.yaml` is the current best
-profile and the base for step 4 under the carry-forward rule.
+Start **Phase 4 — Observability** with the opening prompt in `docs/BUILD_PLAN.md`. Carry
+these in:
 
-**The immediate next step is Phase 3 step 4: cross-encoder reranking** —
-`bge-reranker-base` (ADR-004) over the top ~20 fused candidates, keeping the top 5
-(ARCHITECTURE §4 step 5). What it needs:
+- **The Langfuse stack has never been started** (known issue 8). Only `docker compose config`
+  was ever validated, so the image tags, env vars and auto-provisioned `LANGFUSE_INIT_*` keys
+  are unproven. Budget real time for it.
+- **The pipeline is now deep enough that a trace is worth having.** One `/v1/chat` turn is a
+  router call, a rewrite call, a HyDE call, two retrievals per query, a fusion, twenty
+  cross-encoder passes, an expansion and an answer call. Nothing today can tell you which of
+  those spent the 3.5 seconds; `tracing.py` has been a no-op since Phase 0 and this is the
+  phase it stops being one.
+- **Two unexplained results are waiting for better instrumentation.** Temporal lost 28.6pp at
+  step 4 and never recovered, and multi-hop moved in both directions across the phase with no
+  surviving explanation. Both are retrieval-stage questions that per-stage traces should
+  answer directly.
+- **`make cache`, `make judges` and `make coverage` are preconditions, not extras.** All three
+  are cheap, all three found real defects this phase, and two of those defects were in the
+  checking tools themselves.
 
-- `retrieval/rerank.py`, with the model behind an interface like `Embedder` is, and **run off
-  the event loop** — a cross-encoder is far heavier than the embedder, which is why
-  `vector_search`'s `asyncio.to_thread` fix was made before this step rather than after.
-- The candidates to rerank are the *fused* list, so `hybrid_search` needs to return its wider
-  pool rather than cutting to k before the reranker sees it.
-- Expect real latency: 20 cross-encoder passes per query on CPU is the most expensive thing
-  in the pipeline so far. Record p50 honestly against hybrid's 2572 ms.
+Leftovers that did not block Phase 3:
 
-`judge_faithfulness.v2` and the hand-labelled rows are **done** — see the section above. The
-judge is calibrated at 9/10 and its verdicts are now span-checked, so step 4 can be argued on
-answer quality if the retrieval numbers are ambiguous.
-
-**And judge step 4 on multi-hop specifically** — see the step 3 notes. It is the one category
-that has degraded across the phase.
-
-Settled, and not to be re-litigated:
-
-- **No migration is needed.** `chunks.parent_id` and `chunks.context_prefix` both exist from
-  the Phase 0 schema. Step 1 used the first; step 2 uses the second.
-- **Carry-forward rule.** Each step is evaluated against the current best profile. A step that
-  does not win gets its scoreboard row but is *not* carried into the next step's base.
-- **`judge_faithfulness.v2` is deferred** until before step 4 (rerank), where the case for a
-  change starts to rest on answer quality rather than on exact retrieval metrics.
-- **Compare chunking schemes on `context_recall`, rankers on `recall@k` and MRR.** Step 1 added
-  the metric for this reason; the baseline's value is exact, not estimated, because a flat
-  index with no expansion makes the two identical by construction.
-- **`make coverage` checks search units and context units separately** on a parent-child index,
-  and both must pass. Slot 2: 72/72 on each.
-
-The baseline says where the room is:
-
-- **multi-hop recall@5 is 37.5% and routing is 44.4%** — the two weakest categories, and between
-  them the clearest case for hybrid search and query decomposition
-- **context precision is 19.5%**: roughly four of every five retrieved chunks carry no cited
-  evidence, which is what reranking is for
-- **correctness on routing rows is 0.33** against 0.88 on single-hop
-- dense-only retrieval is weak at exact-token recall, and the corpus is full of rare proper nouns
-  and exact figures on purpose, so the hybrid delta should be visible rather than theoretical
-
-And one thing that has not changed: a new chunking scheme needs a **new index slot**
-(`INDEX_VERSION=2`), not `--force` on slot 1 — slot 1 is what the committed baseline was
-measured against.
-
----
+- `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known
+  issue 13).
+- The semantic cache is implemented and off by default, including in `advanced.yaml` — a
+  cache hit would stand in for a retrieval the eval is meant to measure. Wiring it into
+  `/v1/chat` is a Phase 4+ decision.
+- `multi_query` and `router_enabled` are both implemented, both off, and both documented as
+  losing here rather than being deleted.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — Phase 3 — DONE. Steps 5–7, and `advanced.yaml` saved.**
+  HyDE was the biggest retrieval win after step 1 (context recall 82.1% → 84.9%) and the
+  first real gain on multi-hop since step 1. Multi-query alone produced byte-identical
+  retrieval on all 42 rows — traced to the cross-encoder re-sorting a pool that a second
+  query barely changes on a 104-chunk corpus. The router lost 8.3pp exactly as its own
+  docstring predicted, and is committed switched off. The semantic cache found that ADR-012's
+  0.95 threshold serves 1143's answer for 1144 at cosine 0.954, one thousandth below a
+  correct paraphrase at 0.955 — so a deterministic figure-match guard sits beside the
+  threshold rather than the threshold being tuned. **Phase 3 overall: context recall 61.9% →
+  83.7%, hit rate 73.8% → 90.5%, MRR 0.492 → 0.571, on 3.9 passages instead of 5.0, for +30%
+  latency.** Numeric and temporal both ended exactly where they started, and temporal's
+  28.6pp loss at step 4 is still unexplained. 239 tests, lint clean.
 
 - **2026-10-21 — Phase 3 — judge v2 and the hand-labelled rows. Known issue 2 overturned.**
   Wrote `judge_faithfulness.v2` (decompose into claims, quote a verbatim span for each),
