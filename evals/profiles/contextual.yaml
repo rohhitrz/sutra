@@ -1,0 +1,30 @@
+# Phase 3 step 2 — contextual retrieval prefixes, on top of step 1's index.
+#
+# One change from semantic.yaml: before embedding, a fast model writes 1-2 sentences per child
+# saying what the passage is and where it sits, and that prefix is prepended for the embedding
+# and the tsvector. The stored chunk text is untouched, so citations and the eval's verbatim
+# quote matching still work against the source.
+#
+# The point is the chunk that cannot be found when read alone: "he paid the toll at the
+# nineteenth" carries no name, no year and no road, so its vector sits nowhere near the
+# question that wants it. The prefix puts the subject back.
+#
+# Built with:
+#   python -m sutra.ingestion.run --index-version 3 --parent-child --strategy semantic --contextual
+#
+# Compare to semantic.yaml, not to naive.yaml — the chunking is identical, so this isolates
+# what the prefix bought. recall@k is directly comparable between slots 2 and 3 for the same
+# reason: same units, same sizes.
+name: contextual
+description: Semantic parent-child chunking plus generated context prefixes, answer.v1.
+
+# Retrieval
+top_k: 5
+index_version: 3
+expand_to_parent: true
+
+# Generation
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

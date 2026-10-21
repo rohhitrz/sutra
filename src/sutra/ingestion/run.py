@@ -75,6 +75,9 @@ class IngestionSummary(BaseModel):
     fingerprint: str
     documents: int
     chunks: int
+    # How many chunks got a generated context prefix this run (step 2). Zero when
+    # contextual retrieval is off, and also when every prefix came from the cache.
+    context_prefixes: int = 0
 
 
 class IngestionBlocked(RuntimeError):
@@ -212,6 +215,9 @@ async def ingest(
 
         build = _parent_child_rows if settings.parent_child_enabled else _flat_rows
         rows = build(documents, document_ids, settings, embedder, fingerprint, slot)
+        prefixes_written = await _contextualise_and_embed(
+            session, rows, documents, settings, embedder
+        )
 
         if rows:
             _validate_row_keys(rows)
@@ -220,10 +226,18 @@ async def ingest(
             # One set-based UPDATE beats sending a tsvector per row over the wire, and it keeps
             # the text-search configuration ('english' stemming) in the database where the
             # matching query will also resolve it.
+            #
+            # The prefix is indexed with the text, not instead of it: keyword search should see
+            # the contextualised chunk for the same reason the embedding does. `coalesce`
+            # rather than a plain concat, because `NULL || text` is NULL in SQL and would
+            # silently blank the tsvector of every chunk that has no prefix.
+            contextualised = func.concat(
+                func.coalesce(ChunkRow.context_prefix + text("' '"), text("''")), ChunkRow.text
+            )
             await session.execute(
                 update(ChunkRow)
                 .where(ChunkRow.index_version == slot)
-                .values(tsv=func.to_tsvector(text(f"'{TSV_CONFIG}'"), ChunkRow.text))
+                .values(tsv=func.to_tsvector(text(f"'{TSV_CONFIG}'"), contextualised))
             )
         await session.commit()
 
@@ -233,6 +247,7 @@ async def ingest(
         fingerprint=fingerprint.digest,
         documents=len(documents),
         chunks=len(rows),
+        context_prefixes=prefixes_written,
     )
 
 
@@ -265,17 +280,18 @@ def _flat_rows(
             overlap_tokens=settings.chunk_overlap,
             count_tokens=embedder.count_tokens,
         )
-        vectors = embedder.embed_passages([c.text for c in chunks])
-        for chunk, vector in zip(chunks, vectors, strict=True):
+        for chunk in chunks:
             rows.append(
                 {
                     "document_id": document_ids[doc.slug],
                     "index_version": slot,
+                    "id": uuid.uuid4(),
                     "parent_id": None,
                     "chunk_no": chunk.chunk_no,
                     "text": chunk.text,
-                    "context_prefix": None,  # contextual retrieval arrives in step 2
-                    "embedding": vector,
+                    "context_prefix": None,
+                    # Filled by `_contextualise_and_embed`, after any prefix is generated.
+                    "embedding": None,
                     "token_count": chunk.token_count,
                     "metadata": _base_metadata(doc, fingerprint, chunk.heading),
                 }
@@ -314,12 +330,6 @@ def _parent_child_rows(
             count_tokens=embedder.count_tokens,
             embed=embedder.embed_passages,
         )
-        children = [child for parent in parents for child in parent.children]
-        vectors = embedder.embed_passages([c.text for c in children])
-        vector_by_chunk_no = {
-            child.chunk_no: vector for child, vector in zip(children, vectors, strict=True)
-        }
-
         for parent in parents:
             parent_uuid = uuid.uuid4()
             rows.append(
@@ -357,7 +367,7 @@ def _parent_child_rows(
                         "chunk_no": child.chunk_no,
                         "text": child.text,
                         "context_prefix": None,
-                        "embedding": vector_by_chunk_no[child.chunk_no],
+                        "embedding": None,  # filled by `_contextualise_and_embed`
                         "token_count": child.token_count,
                         "metadata": {
                             **_base_metadata(doc, fingerprint, child.heading),
@@ -367,6 +377,102 @@ def _parent_child_rows(
                     }
                 )
     return rows
+
+
+async def _cached_prefixes(session: AsyncSession) -> dict[str, str]:
+    """Every prefix already generated, keyed by content hash, from any index slot.
+
+    The database is the cache. A prefix depends only on the chunk text, its document and the
+    prompt version — all three are in the hash — so one generated for slot 2 is equally valid
+    for slot 3, and re-ingesting an unchanged corpus costs nothing. Without this, idempotent
+    ingestion would still spend a hundred model calls every run, which would make ADR-021's
+    "re-running is free" true about rows and false about money.
+    """
+    stmt = select(ChunkRow.meta["prefix_hash"].astext, ChunkRow.context_prefix).where(
+        ChunkRow.context_prefix.is_not(None)
+    )
+    return {
+        prefix_hash: prefix
+        for prefix_hash, prefix in (await session.execute(stmt)).all()
+        if prefix_hash and prefix
+    }
+
+
+async def _contextualise_and_embed(
+    session: AsyncSession,
+    rows: list[dict[str, object]],
+    documents: list[ParsedDocument],
+    settings: Settings,
+    embedder: Embedder,
+) -> int:
+    """Fill `context_prefix` and `embedding` on every searchable row. Returns prefixes written.
+
+    Parents are skipped: they are context units, never searched, and deliberately carry no
+    embedding. Everything else is embedded from the *contextualised* text while the stored
+    `text` column keeps the verbatim slice — which is what lets citations quote the source and
+    the eval match its 72 verbatim quotes against an index that searched something else.
+    """
+    searchable = [r for r in rows if not cast(dict, r["metadata"]).get("is_parent", False)]
+    if not searchable:
+        return 0
+
+    written = 0
+    if settings.contextual_prefixes_enabled:
+        from sutra.ingestion.contextualize import (
+            ChunkToContextualise,
+            content_hash,
+            generate_prefixes,
+        )
+        from sutra.llm.client import LLMClient
+        from sutra.prompts import PromptLoader
+
+        bodies = {doc.slug: doc.body for doc in documents}
+        titles = {doc.slug: doc.title for doc in documents}
+        pending: list[ChunkToContextualise] = []
+        for row in searchable:
+            meta = cast(dict, row["metadata"])
+            slug = cast(str, meta["doc_slug"])
+            key = content_hash(
+                doc_slug=slug,
+                text=cast(str, row["text"]),
+                prompt_version=settings.prompt_version_context_prefix,
+            )
+            meta["prefix_hash"] = key
+            pending.append(
+                ChunkToContextualise(
+                    key=key,
+                    doc_slug=slug,
+                    doc_title=titles.get(slug, slug),
+                    heading=meta.get("heading"),
+                    text=cast(str, row["text"]),
+                )
+            )
+
+        prefixes = await generate_prefixes(
+            pending,
+            documents=bodies,
+            cached=await _cached_prefixes(session),
+            client=LLMClient(settings=settings),
+            loader=PromptLoader(),
+            settings=settings,
+        )
+        for row, chunk in zip(searchable, pending, strict=True):
+            prefix = prefixes.get(chunk.key)
+            if prefix:
+                row["context_prefix"] = prefix
+                written += 1
+
+    from sutra.ingestion.contextualize import contextualised_text
+
+    texts = [
+        contextualised_text(cast("str | None", r["context_prefix"]), cast(str, r["text"]))
+        for r in searchable
+    ]
+    # Blocking ONNX work, kept off the event loop for the same reason `vector_search` does it.
+    vectors = await asyncio.to_thread(embedder.embed_passages, texts)
+    for row, vector in zip(searchable, vectors, strict=True):
+        row["embedding"] = vector
+    return written
 
 
 def _blocked_message(slot: int, occupied: OccupiedSlot, fingerprint: IndexFingerprint) -> str:
@@ -410,6 +516,11 @@ def main() -> int:
         help="write parent/child chunks instead of flat ones (Phase 3 step 1)",
     )
     parser.add_argument(
+        "--contextual",
+        action="store_true",
+        help="generate a context prefix per chunk before embedding (Phase 3 step 2)",
+    )
+    parser.add_argument(
         "--strategy",
         choices=["recursive", "semantic"],
         default=None,
@@ -423,6 +534,8 @@ def main() -> int:
     overrides: dict[str, object] = {}
     if args.parent_child:
         overrides["parent_child_enabled"] = True
+    if args.contextual:
+        overrides["contextual_prefixes_enabled"] = True
     if args.strategy is not None:
         overrides["chunk_strategy"] = args.strategy
     if overrides:
@@ -452,6 +565,11 @@ def main() -> int:
         print(
             f"ingested {summary.chunks} chunks from {summary.documents} documents "
             f"into index slot {summary.index_version} (fingerprint {summary.fingerprint})"
+            + (
+                f", {summary.context_prefixes} context prefixes generated"
+                if summary.context_prefixes
+                else ""
+            )
         )
     return 0
 

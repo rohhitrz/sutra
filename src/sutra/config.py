@@ -131,6 +131,7 @@ class Settings(BaseSettings):
     prompt_version_judge_faithfulness: str = "v1"
     prompt_version_judge_relevance: str = "v1"
     prompt_version_judge_correctness: str = "v1"
+    prompt_version_context_prefix: str = "v1"
 
     # ---- Retrieval / ingestion ----
     # # CONCEPT: Index versioning — re-ingesting under a new version lets old chunks keep serving
@@ -175,6 +176,16 @@ class Settings(BaseSettings):
     # # CONCEPT: Retrieval-time expansion — search the children, then hand the model their
     # # parents. Without this, parent-child is just small chunks and strictly worse.
     retrieval_expand_to_parent: bool = False
+
+    # ---- Contextual retrieval (Phase 3 step 2) ----
+    # # CONCEPT: A fast model writes 1-2 sentences situating each chunk in its document,
+    # # prepended before embedding so a chunk carries the subject its own sentences omit.
+    # # Off by default: it costs one model call per chunk on a cold cache, and slots 1-2
+    # # are measured without it.
+    contextual_prefixes_enabled: bool = False
+    # In-flight prefix generations. Modest on purpose — ingestion is not latency-bound,
+    # and calls issued in document order let the provider's prefix cache do its work.
+    contextualize_concurrency: int = 4
     # # CONCEPT: k is a recall/precision dial *and* a cost dial — every retrieved chunk is
     # # context the model pays for. 5 matches the Recall@5 column in the PROGRESS scoreboard.
     retrieval_top_k: int = 5

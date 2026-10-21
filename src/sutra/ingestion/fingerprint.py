@@ -49,6 +49,10 @@ class IndexFingerprint(BaseModel):
     # Versioned separately from `chunker_version` so a change to the semantic path cannot
     # invalidate a flat index whose output has not moved.
     semantic_chunker_version: int | None = None
+    # Contextual retrieval (step 2). The prompt *version*, not a boolean: a rewritten prompt
+    # produces different prefixes, so it produces a different index — and two slots built with
+    # different prompt versions must not compare equal.
+    context_prefix_prompt: str | None = None
 
     @property
     def digest(self) -> str:
@@ -88,4 +92,7 @@ def build_fingerprint(settings: Settings, documents: list[ParsedDocument]) -> In
             else None
         ),
         semantic_chunker_version=SEMANTIC_CHUNKER_VERSION if parent_child else None,
+        context_prefix_prompt=(
+            settings.prompt_version_context_prefix if settings.contextual_prefixes_enabled else None
+        ),
     )
