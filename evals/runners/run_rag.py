@@ -43,8 +43,8 @@ from sutra.config import Settings, get_settings
 from sutra.db.engine import get_sessionmaker
 from sutra.generation.answer import format_context, generate_answer
 from sutra.ingestion.embed import get_embedder
-from sutra.ingestion.fingerprint import build_fingerprint
-from sutra.ingestion.parse import parse_corpus
+from sutra.ingestion.fingerprint import IndexFingerprint
+from sutra.ingestion.run import read_slot_fingerprint
 from sutra.llm.client import LLMClient
 from sutra.prompts import PromptLoader
 from sutra.retrieval.expand import expand_to_parents
@@ -55,7 +55,6 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_DIR = REPO_ROOT / "evals" / "profiles"
 REPORT_DIR = REPO_ROOT / "evals" / "reports"
-CORPUS_DIR = REPO_ROOT / "data" / "corpus"
 
 
 class Profile(BaseModel):
@@ -226,10 +225,21 @@ class RunReport(BaseModel):
     duration_seconds: float
 
     # Reproducibility block. Without this a report is a number with no provenance.
+    #
+    # Every field here is read back from the index slot that was queried, never recomputed from
+    # the runner's settings. Recomputing answers "what would my current config build?", and the
+    # profile picks the slot independently of that config — so eleven Phase 3 reports over three
+    # different indexes all carried slot 1's digest and `400/60`, and nothing in the repo
+    # distinguished the indexes whose comparison was the phase's headline result.
     index_fingerprint: str
+    # The whole stored fingerprint, not only its digest. The digest proves identity; the fields
+    # are what let a reader see *how* two indexes differ — parent-child, semantic, contextual
+    # prefixes — without re-deriving it from a profile name.
+    index: IndexFingerprint
     chunk_tokens: int
     chunk_overlap: int
     chunker_version: int
+    chunk_strategy: str
     embedding_model: str
     answer_model: str
     judge_model: str
@@ -303,6 +313,9 @@ async def _run_row(
                 index_version=profile.index_version,
                 settings=settings,
                 embedder=embedder,
+                # The runner's own client, so 42 rows share one connection pool instead of
+                # opening one per model-backed retrieval stage per row.
+                client=client,
             )
             # Expansion needs the session, so it happens inside it — but still before the
             # model call, because no DB connection is held across generation.
@@ -433,6 +446,29 @@ async def assert_coverage(profile: Profile) -> None:
             raise SystemExit(msg)
 
 
+async def slot_fingerprint(profile: Profile) -> IndexFingerprint:
+    """The fingerprint of the slot this profile measures. Refuses a slot that cannot state one.
+
+    A slot holding rows whose metadata has no readable fingerprint is the ADR-022 "older
+    schema" state. Ingestion already refuses to write into it; measuring it is refused for the
+    same reason, one step later — a report that cannot say what index produced its numbers is
+    not a measurement, and the alternative is the defect this replaced: quietly substituting
+    the runner's own configuration and publishing it as provenance.
+    """
+    occupied = await read_slot_fingerprint(profile.index_version)
+    if occupied is None:
+        msg = f"index slot {profile.index_version} is empty — run `make ingest` first"
+        raise SystemExit(msg)
+    if occupied.fingerprint is None:
+        msg = (
+            f"index slot {profile.index_version} holds chunks with no readable index "
+            f"fingerprint (stored keys: {sorted(occupied.raw) or 'none'}). The report could not "
+            "say what index it measured. Re-ingest the slot with `make ingest`."
+        )
+        raise SystemExit(msg)
+    return occupied.fingerprint
+
+
 async def run(
     profile: Profile, *, limit: int | None = None, skip_coverage: bool = False
 ) -> RunReport:
@@ -440,6 +476,7 @@ async def run(
     settings = profile.apply_to(get_settings())
     if not skip_coverage:
         await assert_coverage(profile)
+    stored = await slot_fingerprint(profile)
 
     golden, errors = load_rows(DATASET_DIR / "golden_qa.jsonl", GoldenRow)
     if errors:
@@ -471,7 +508,6 @@ async def run(
     )
     duration = (dt.datetime.now(dt.UTC) - started).total_seconds()
 
-    fingerprint = build_fingerprint(settings, parse_corpus(CORPUS_DIR))
     latencies = sorted(r.latency_ms for r in rows) or [0.0]
     # A row whose answer call failed produced no answer to judge. Counting it as "did not
     # refuse" would charge a provider fault to the model's refusal behaviour, which is the
@@ -484,11 +520,13 @@ async def run(
         profile=profile,
         started_at=started,
         duration_seconds=duration,
-        index_fingerprint=fingerprint.digest,
-        chunk_tokens=settings.chunk_tokens,
-        chunk_overlap=settings.chunk_overlap,
-        chunker_version=fingerprint.chunker_version,
-        embedding_model=settings.embedding_model,
+        index_fingerprint=stored.digest,
+        index=stored,
+        chunk_tokens=stored.chunk_tokens,
+        chunk_overlap=stored.chunk_overlap,
+        chunker_version=stored.chunker_version,
+        chunk_strategy=stored.chunk_strategy,
+        embedding_model=stored.embedding_model,
         answer_model=settings.llm_strong,
         judge_model=settings.llm_strong,
         prompt_versions={

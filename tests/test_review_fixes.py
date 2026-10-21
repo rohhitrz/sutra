@@ -11,12 +11,77 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
-from evals.runners.run_rag import Profile
+from evals.runners.run_rag import Profile, slot_fingerprint
 from pydantic import ValidationError
 
 from sutra.config import CONTEXT_PREFIX_BUDGET_TOKENS, EMBEDDING_MAX_SEQUENCE_TOKENS, Settings
-from sutra.ingestion.run import _trim_prefixes_to_budget
+from sutra.ingestion.fingerprint import IndexFingerprint
+from sutra.ingestion.run import OccupiedSlot, _trim_prefixes_to_budget
 from sutra.llm.client import LLMClient, client_scope
+
+# --------------------------------------------------------------------------- finding 1
+
+
+def _fingerprint(**overrides: object) -> IndexFingerprint:
+    base: dict[str, object] = {
+        "chunk_strategy": "recursive",
+        "chunk_tokens": 400,
+        "chunk_overlap": 60,
+        "chunker_version": 2,
+        "embedding_model": "BAAI/bge-small-en-v1.5",
+        "corpus_hash": "deadbeef",
+    }
+    return IndexFingerprint.model_validate({**base, **overrides})
+
+
+@pytest.mark.asyncio
+async def test_report_fingerprint_comes_from_the_slot_not_the_runners_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defect: eleven Phase 3 reports over three indexes all carried slot 1's digest.
+
+    The runner's `.env` describes slot 1 while the profile selects slot 3, which is the ordinary
+    case. The fingerprint recorded must be the one the slot holds.
+    """
+    stored = _fingerprint(chunk_strategy="semantic", parent_child=True, child_tokens=200)
+
+    async def fake_read(index_version: int) -> OccupiedSlot:
+        assert index_version == 3
+        return OccupiedSlot(raw=stored.model_dump(), fingerprint=stored)
+
+    monkeypatch.setattr("evals.runners.run_rag.read_slot_fingerprint", fake_read)
+    got = await slot_fingerprint(Profile(name="advanced", index_version=3))
+
+    assert got.digest == stored.digest
+    # And specifically *not* what the runner's own settings would have computed.
+    assert got.digest != _fingerprint().digest
+    assert got.chunk_strategy == "semantic"
+
+
+@pytest.mark.asyncio
+async def test_eval_refuses_a_slot_that_cannot_state_its_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows but no readable fingerprint is the ADR-022 third state. Ingestion refuses it; so
+    must measurement, rather than substituting the runner's config as provenance."""
+
+    async def fake_read(index_version: int) -> OccupiedSlot:
+        return OccupiedSlot(raw={"chunk_tokens": 400}, fingerprint=None)
+
+    monkeypatch.setattr("evals.runners.run_rag.read_slot_fingerprint", fake_read)
+    with pytest.raises(SystemExit, match="no readable index fingerprint"):
+        await slot_fingerprint(Profile(name="naive", index_version=1))
+
+
+@pytest.mark.asyncio
+async def test_eval_refuses_an_empty_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_read(index_version: int) -> None:
+        return None
+
+    monkeypatch.setattr("evals.runners.run_rag.read_slot_fingerprint", fake_read)
+    with pytest.raises(SystemExit, match="is empty"):
+        await slot_fingerprint(Profile(name="naive", index_version=7))
+
 
 # --------------------------------------------------------------------------- finding 2
 

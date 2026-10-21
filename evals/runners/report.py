@@ -17,6 +17,49 @@ def _pct(value: float) -> str:
     return f"{value:.1%}"
 
 
+def _chunking(report: RunReport) -> str:
+    """The chunking shape, read off the index's own fingerprint.
+
+    Spelled out field by field because the Phase 3 comparison that mattered — a flat index
+    against a parent-child contextual one — looked identical in this row when it was built from
+    `chunk_tokens` and `chunk_overlap` alone.
+    """
+    fp = report.index
+    if fp.parent_child:
+        shape = (
+            f"{fp.chunk_strategy} parent-child, parents {fp.parent_tokens} tokens, "
+            f"children {fp.child_tokens} + {fp.child_overlap} overlap"
+        )
+        if fp.semantic_breakpoint_percentile is not None:
+            shape += f", breakpoint p{fp.semantic_breakpoint_percentile}"
+    else:
+        shape = f"flat {fp.chunk_strategy}, {fp.chunk_tokens} tokens + {fp.chunk_overlap} overlap"
+    prefix = (
+        f", contextual prefixes `{fp.context_prefix_prompt}`" if fp.context_prefix_prompt else ""
+    )
+    return f"{shape}{prefix} (chunker v{fp.chunker_version})"
+
+
+def _retrieval(report: RunReport) -> str:
+    """The retrieval pipeline actually run. This row read `vector-only` on every report,
+    including the hybrid and reranked ones whose whole purpose was to not be that."""
+    p = report.profile
+    parts = [f"{p.retrieval_mode}, k={p.top_k}"]
+    if p.retrieval_mode != "vector":
+        parts.append(f"candidates={p.candidate_k}, rrf_k={p.rrf_k}")
+    if p.rerank_enabled:
+        parts.append(f"rerank over {p.rerank_candidates}")
+    if p.query_rewrite_enabled:
+        parts.append(f"multi-query x{p.multi_query_count}")
+    if p.hyde_enabled:
+        parts.append("hyde")
+    if p.router_enabled:
+        parts.append("router")
+    if p.expand_to_parent:
+        parts.append("expand to parents")
+    return " · ".join(parts)
+
+
 def render_markdown(report: RunReport) -> str:
     lines: list[str] = []
     add = lines.append
@@ -37,12 +80,9 @@ def render_markdown(report: RunReport) -> str:
     add("|---|---|")
     add(f"| index fingerprint | `{report.index_fingerprint}` |")
     add(f"| index slot | {report.profile.index_version} |")
-    add(
-        f"| chunking | {report.chunk_tokens} tokens, {report.chunk_overlap} overlap, "
-        f"chunker v{report.chunker_version} |"
-    )
+    add(f"| chunking | {_chunking(report)} |")
     add(f"| embedding model | `{report.embedding_model}` |")
-    add(f"| retrieval | vector-only, k={report.profile.top_k} |")
+    add(f"| retrieval | {_retrieval(report)} |")
     add(f"| answer model | `{report.answer_model}` |")
     add(f"| prompt versions | {', '.join(f'{k}={v}' for k, v in report.prompt_versions.items())} |")
     add("")
