@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sutra.config import Settings, get_settings
+from sutra.config import TSV_CONFIG, Settings, get_settings
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
 from sutra.ingestion.embed import Embedder, get_embedder
@@ -59,6 +61,119 @@ class RetrievedChunk(BaseModel):
     # Cosine *similarity* in [-1, 1], not the distance Postgres returns. Higher is nearer.
     score: float
     rank: int
+
+
+def _searchable_columns() -> list[Any]:
+    """The columns every retriever selects, so their rows build the same `RetrievedChunk`."""
+    return [
+        ChunkRow.id,
+        ChunkRow.parent_id,
+        ChunkRow.chunk_no,
+        ChunkRow.text,
+        ChunkRow.token_count,
+        ChunkRow.meta,
+        DocumentRow.slug,
+        DocumentRow.title,
+        DocumentRow.doc_type,
+    ]
+
+
+def _to_chunk(row: Any, *, score: float, rank: int) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=str(row.id),
+        parent_id=str(row.parent_id) if row.parent_id else None,
+        # Joined from `documents` rather than read out of chunk metadata: the metadata copy
+        # is a denormalised convenience, and the join is the source of truth.
+        doc_slug=row.slug,
+        doc_title=row.title,
+        doc_type=row.doc_type,
+        chunk_no=row.chunk_no,
+        heading=row.meta.get("heading"),
+        text=row.text,
+        token_count=row.token_count,
+        score=score,
+        rank=rank,
+    )
+
+
+def _or_tsquery(query: str) -> str:
+    """Turn a natural question into an OR-ed tsquery: `oren | dask | nineteenth`.
+
+    # CONCEPT: A lexical *retriever* ORs its terms and lets ranking sort them out; a lexical
+    # *filter* ANDs them. Postgres ships only the filter: `websearch_to_tsquery` and
+    # `plainto_tsquery` both AND, so a chunk must contain every word of the question to be a
+    # candidate at all.
+    #
+    # Measured before changing it, because the default looked reasonable: **21 of the 42
+    # golden questions returned zero keyword hits**, median 0. Fused with a dense list, that
+    # is not a weak second opinion — it is no second opinion on half the eval, and the hybrid
+    # row would have been the vector row with extra steps and a plausible story attached.
+    #
+    # OR-ing matches far more chunks and pushes all the work onto `ts_rank_cd`, which is what
+    # a ranking function is for and what BM25 does too. The cost is that a question's common
+    # words now match widely; cover-density ranking handles that by rewarding chunks where
+    # several query terms land close together.
+
+    Only `\\w+` runs survive, so no user input can reach the tsquery parser as an operator.
+    Postgres drops stop words itself; a question made entirely of them yields an empty query,
+    which matches nothing rather than erroring.
+    """
+    terms = re.findall(r"\w+", query.lower())
+    return " | ".join(terms)
+
+
+async def keyword_search(
+    query: str,
+    *,
+    session: AsyncSession,
+    k: int | None = None,
+    index_version: int | None = None,
+    settings: Settings | None = None,
+) -> list[RetrievedChunk]:
+    """Rank chunks by Postgres full-text search over the `tsv` column.
+
+    # CONCEPT: Lexical retrieval answers a question dense retrieval cannot. An embedding
+    # encodes topic, not identity — "waystone 17" and "waystone 19" are neighbours in vector
+    # space and different facts in the world. A term index matches the token or it does not,
+    # which is exactly the discrimination a rare proper noun or an exact figure needs.
+    #
+    # `websearch_to_tsquery` rather than `plainto_tsquery`: it accepts quoted phrases and `or`
+    # the way a person actually types a query, and it never raises on punctuation — a
+    # user-facing parser should not be able to turn a question mark into a 500.
+    #
+    # ADR-002 is honest that this is **not BM25**. `ts_rank_cd` is cover density ranking: it
+    # rewards terms appearing close together and knows nothing about inverse document
+    # frequency, so a common word weighs as much as a rare one. BM25's IDF term is the thing
+    # we are giving up by keeping one datastore, and on a corpus full of rare proper nouns
+    # that is the part that would have helped most. It is still a term match, which is the
+    # property dense retrieval lacks entirely.
+    """
+    settings = settings or get_settings()
+    top_k = k if k is not None else settings.retrieval_top_k
+    slot = index_version if index_version is not None else settings.index_version
+
+    tsquery = func.to_tsquery(text(f"'{TSV_CONFIG}'"), _or_tsquery(query))
+    rank_score = func.ts_rank_cd(ChunkRow.tsv, tsquery).label("rank_score")
+
+    stmt = (
+        select(*_searchable_columns(), rank_score)
+        .join(DocumentRow, DocumentRow.id == ChunkRow.document_id)
+        .where(ChunkRow.index_version == slot)
+        # Same reason as the vector side: parents are context units, not search units. They
+        # *do* carry a tsvector, so without this filter keyword search would return passages
+        # the vector half can never return, and fusion would be comparing two different
+        # candidate sets.
+        .where(ChunkRow.embedding.is_not(None))
+        .where(ChunkRow.tsv.op("@@")(tsquery))
+        .order_by(rank_score.desc())
+        .limit(top_k)
+    )
+
+    rows = (await session.execute(stmt)).all()
+    return [
+        _to_chunk(row, score=float(row.rank_score), rank=rank)
+        for rank, row in enumerate(rows, start=1)
+    ]
 
 
 async def vector_search(
@@ -148,3 +263,87 @@ async def vector_search(
         )
         for rank, row in enumerate(rows, start=1)
     ]
+
+
+async def hybrid_search(
+    query: str,
+    *,
+    session: AsyncSession,
+    k: int | None = None,
+    index_version: int | None = None,
+    settings: Settings | None = None,
+    embedder: Embedder | None = None,
+) -> list[RetrievedChunk]:
+    """Run both retrievers over a wider candidate pool, then fuse by reciprocal rank.
+
+    # CONCEPT: Each half is asked for `retrieval_candidate_k` results, not `k`. Fusing two
+    # top-5 lists can only ever reorder 5-10 documents, so a document that sits at rank 7 on
+    # one side and rank 2 on the other — precisely the case fusion exists to rescue — is never
+    # considered. Retrieve wide, fuse, then cut to k.
+
+    The two queries run **sequentially**, not concurrently. One `AsyncSession` cannot have two
+    statements in flight, and giving each half its own session would double the connections
+    held per request to save a few milliseconds on a query that is not the bottleneck. The
+    embedding, which is the slow part, already runs off the event loop.
+    """
+    from sutra.retrieval.fusion import reciprocal_rank_fusion
+
+    settings = settings or get_settings()
+    top_k = k if k is not None else settings.retrieval_top_k
+    candidates = max(settings.retrieval_candidate_k, top_k)
+
+    dense = await vector_search(
+        query,
+        session=session,
+        k=candidates,
+        index_version=index_version,
+        settings=settings,
+        embedder=embedder,
+    )
+    lexical = await keyword_search(
+        query, session=session, k=candidates, index_version=index_version, settings=settings
+    )
+    logger.debug(
+        "hybrid: %d dense, %d lexical candidates -> top %d", len(dense), len(lexical), top_k
+    )
+    return reciprocal_rank_fusion([dense, lexical], k=settings.rrf_k, limit=top_k)
+
+
+async def search(
+    query: str,
+    *,
+    session: AsyncSession,
+    k: int | None = None,
+    index_version: int | None = None,
+    settings: Settings | None = None,
+    embedder: Embedder | None = None,
+) -> list[RetrievedChunk]:
+    """The configured retriever. One entry point, so callers do not branch on mode.
+
+    `retrieval_mode` exists so `make eval` can ablate the halves against the whole: the only
+    way to say what fusion bought is to have measured each side alone under the same k, on
+    the same index, with the same everything else.
+    """
+    settings = settings or get_settings()
+    mode = settings.retrieval_mode
+    if mode == "keyword":
+        return await keyword_search(
+            query, session=session, k=k, index_version=index_version, settings=settings
+        )
+    if mode == "hybrid":
+        return await hybrid_search(
+            query,
+            session=session,
+            k=k,
+            index_version=index_version,
+            settings=settings,
+            embedder=embedder,
+        )
+    return await vector_search(
+        query,
+        session=session,
+        k=k,
+        index_version=index_version,
+        settings=settings,
+        embedder=embedder,
+    )

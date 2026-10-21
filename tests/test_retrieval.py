@@ -11,16 +11,22 @@ import hashlib
 from collections.abc import AsyncIterator, Sequence
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, func, text, update
 
-from sutra.config import Settings
+from sutra.config import TSV_CONFIG, Settings
 from sutra.db.engine import get_engine, get_sessionmaker
 from sutra.db.models import Chunk as ChunkRow
 from sutra.ingestion.chunk import estimate_tokens
 from sutra.ingestion.embed import get_embedder
 from sutra.ingestion.run import CHUNKS_TABLE, ingest
 from sutra.retrieval.expand import expand_to_parents
-from sutra.retrieval.search import vector_search
+from sutra.retrieval.search import (
+    _or_tsquery,
+    hybrid_search,
+    keyword_search,
+    search,
+    vector_search,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -347,6 +353,13 @@ async def parent_child_index(settings: Settings) -> AsyncIterator[Settings]:
                 )
                 chunk_no += 1
         await session.execute(insert(CHUNKS_TABLE), rows)
+        # The tsvector is derived in Postgres during real ingestion; these rows are written
+        # directly, so build it here or keyword search has nothing to match against.
+        await session.execute(
+            update(ChunkRow)
+            .where(ChunkRow.index_version == PARENT_CHILD_SLOT)
+            .values(tsv=func.to_tsvector(text(f"'{TSV_CONFIG}'"), ChunkRow.text))
+        )
         await session.commit()
 
     yield configured
@@ -411,3 +424,96 @@ async def test_expansion_passes_through_a_flat_index(stub_index: Settings):
         expanded = await expand_to_parents(hits, session=session)
 
     assert [c.chunk_id for c in expanded] == [c.chunk_id for c in hits]
+
+
+# ---------------------------------------------------------------------------
+# keyword search and hybrid fusion (Phase 3 step 3)
+# ---------------------------------------------------------------------------
+
+
+def test_the_tsquery_ors_its_terms():
+    """ANDed terms made keyword search return nothing for 21 of the 42 golden questions —
+    a second opinion that is silent on half the eval is not a second opinion. A lexical
+    retriever ORs and lets ranking sort it out; only a filter ANDs."""
+    assert _or_tsquery("Who paid the toll?") == "who | paid | the | toll"
+    assert _or_tsquery("waystone 17") == "waystone | 17"
+
+
+def test_the_tsquery_cannot_carry_operators_through():
+    """Only `\\w+` runs survive, so nothing a user types reaches the tsquery parser as syntax."""
+    assert _or_tsquery("drop & table; (x | y) !z") == "drop | table | x | y | z"
+    assert _or_tsquery("!!!") == ""
+
+
+async def test_keyword_search_finds_an_exact_token_in_the_real_index(stub_index: Settings):
+    """The property dense retrieval does not have. A stub embedder is used everywhere else in
+    this file precisely because vectors are arbitrary; here the match is the real thing."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await keyword_search(
+            "Halvern Reach", session=session, k=5, index_version=TEST_SLOT, settings=stub_index
+        )
+
+    assert hits, "an exact phrase from the corpus returned nothing"
+    assert any("Halvern" in h.text for h in hits)
+    assert [h.rank for h in hits] == list(range(1, len(hits) + 1))
+
+
+async def test_keyword_search_excludes_parents(parent_child_index: Settings):
+    """Parents carry a tsvector but are not search units. Without the filter, keyword search
+    would return passages the vector half can never return, and fusion would be comparing two
+    different candidate sets rather than two opinions about one."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await keyword_search(
+            "PARENT child",
+            session=session,
+            k=10,
+            index_version=PARENT_CHILD_SLOT,
+            settings=parent_child_index,
+        )
+
+    assert hits, "expected the children to match"
+    assert all(not h.text.startswith("PARENT") for h in hits)
+
+
+async def test_hybrid_returns_what_neither_half_had_alone(stub_index: Settings):
+    """The fused list must be a genuine merge: drawn from both halves, ranked 1..n, and no
+    longer than k."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        query = "the Tide Clock at Halvern Reach"
+        dense = await vector_search(
+            query, session=session, k=20, index_version=TEST_SLOT, settings=stub_index
+        )
+        lexical = await keyword_search(
+            query, session=session, k=20, index_version=TEST_SLOT, settings=stub_index
+        )
+        fused = await hybrid_search(
+            query,
+            session=session,
+            k=5,
+            index_version=TEST_SLOT,
+            settings=stub_index,
+            embedder=StubEmbedder(),
+        )
+
+    assert len(fused) <= 5
+    assert [c.rank for c in fused] == list(range(1, len(fused) + 1))
+    sources = {c.chunk_id for c in dense} | {c.chunk_id for c in lexical}
+    assert {c.chunk_id for c in fused} <= sources
+
+
+async def test_search_dispatches_on_the_configured_mode(stub_index: Settings):
+    """One entry point so callers never branch on mode — and so a profile can ablate the
+    halves against the whole by changing a yaml field."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        for mode in ("vector", "keyword", "hybrid"):
+            configured = stub_index.model_copy(
+                update={"retrieval_mode": mode, "index_version": TEST_SLOT}
+            )
+            hits = await search(
+                "Halvern Reach", session=session, k=3, settings=configured, embedder=StubEmbedder()
+            )
+            assert len(hits) <= 3, mode

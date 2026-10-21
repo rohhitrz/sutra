@@ -1,0 +1,26 @@
+# Phase 3 step 3 — keyword FTS fused with vector search by RRF, on step 2's index.
+#
+# Identical to contextual.yaml except for the retriever, so the delta is the fusion and
+# nothing else. The tsvector in slot 3 was built from the *contextualised* text, so the
+# keyword half sees the generated prefixes too — no re-ingest was needed for this step.
+#
+# Read alongside keyword_only.yaml and contextual.yaml: the only way to say what fusion bought
+# is to have measured each half alone, same k, same index, same everything else.
+name: hybrid
+description: Vector + Postgres FTS fused with Reciprocal Rank Fusion, parent expansion, answer.v1.
+
+# Retrieval
+top_k: 5
+index_version: 3
+expand_to_parent: true
+retrieval_mode: hybrid
+# Each half contributes 20 candidates before fusion. Fusing two top-5 lists can only reorder
+# 5-10 documents, so the rank-7-and-rank-2 case fusion exists to rescue would never be seen.
+candidate_k: 20
+rrf_k: 60
+
+# Generation
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

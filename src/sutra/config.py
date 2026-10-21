@@ -85,6 +85,13 @@ MODEL_CAPABILITIES: dict[str, ModelCapabilities] = {
 # the embedder.
 EMBEDDING_MAX_SEQUENCE_TOKENS = 512
 
+# # CONCEPT: The text-search configuration decides the stemmer and the stop-word list, and it
+# # has to be the *same one* when the tsvector is built and when the query is parsed. Mismatch
+# # them and the index stems "waystones" to "waystone" while the query does not — no error, no
+# # warning, just a term index that quietly stops matching. One constant, imported by both
+# # ingestion and retrieval, is what makes that mismatch impossible rather than unlikely.
+TSV_CONFIG = "english"
+
 
 class Settings(BaseSettings):
     """Typed application settings, loaded from the environment and `.env`."""
@@ -176,6 +183,19 @@ class Settings(BaseSettings):
     # # CONCEPT: Retrieval-time expansion — search the children, then hand the model their
     # # parents. Without this, parent-child is just small chunks and strictly worse.
     retrieval_expand_to_parent: bool = False
+
+    # ---- Hybrid retrieval (Phase 3 step 3) ----
+    # # CONCEPT: Dense retrieval matches topic, lexical retrieval matches tokens. Neither is a
+    # # superset of the other, which is why fusing them beats either — and why the mode is a
+    # # dial rather than a constant, so `make eval` can measure each half alone.
+    retrieval_mode: Literal["vector", "keyword", "hybrid"] = "vector"
+    # How many candidates each retriever contributes before fusion. Wider than k on purpose:
+    # fusing two top-5 lists can only reorder 5-10 documents, so the rank-7-and-rank-2 case
+    # that fusion exists to rescue would never be seen.
+    retrieval_candidate_k: int = 20
+    # The RRF constant (Cormack et al. 2009). Higher trusts agreement between retrievers more;
+    # lower trusts an individual retriever's top rank more.
+    rrf_k: int = 60
 
     # ---- Contextual retrieval (Phase 3 step 2) ----
     # # CONCEPT: A fast model writes 1-2 sentences situating each chunk in its document,

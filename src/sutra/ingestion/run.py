@@ -27,7 +27,7 @@ from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sutra.config import Settings, get_settings
+from sutra.config import TSV_CONFIG, Settings, get_settings
 from sutra.db.engine import get_sessionmaker
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
@@ -45,7 +45,6 @@ CHUNKS_TABLE = cast(Table, ChunkRow.__table__)
 # Postgres text-search configuration. 'english' applies stemming and stop-word removal, so
 # "waystones" matches "waystone". Unused by Phase 2's vector-only retrieval, but built now
 # because Phase 3's hybrid search needs it and backfilling it later is a re-ingest.
-TSV_CONFIG = "english"
 
 
 class OccupiedSlot(BaseModel):

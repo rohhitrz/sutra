@@ -134,7 +134,7 @@ def turn_deps(monkeypatch: pytest.MonkeyPatch, settings: Settings):
     """Stub the two external edges — retrieval and the model — and keep persistence real."""
     chunks = [a_chunk(1), a_chunk(2)]
     monkeypatch.setattr(
-        "sutra.api.chat.vector_search",
+        "sutra.api.chat.search",
         lambda *a, **kw: _async_value(chunks),
     )
     draft = AnswerDraft(answer="68,000.", citations=[1], confidence=0.9, refused=False)

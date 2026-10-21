@@ -1,0 +1,21 @@
+# Phase 3 step 3, ablation — the lexical half alone.
+#
+# Not a candidate configuration; nobody should ship keyword-only retrieval over a corpus of
+# paraphrasable prose. It exists so the hybrid row means something: without it, a hybrid that
+# beats the dense baseline could be beating it because fusion works or because FTS alone is
+# simply better on this corpus, and the report could not tell you which.
+#
+# Expect it to lose badly on paraphrase questions and to win on exact proper nouns and figures,
+# which is the complementarity the fusion is built on.
+name: keyword_only
+description: Postgres FTS alone (ts_rank_cd), no vector search. An ablation, not a candidate.
+
+top_k: 5
+index_version: 3
+expand_to_parent: true
+retrieval_mode: keyword
+
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

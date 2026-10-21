@@ -29,7 +29,7 @@ from sutra.ingestion.embed import Embedder
 from sutra.llm.client import LLMClient
 from sutra.prompts import PromptLoader
 from sutra.retrieval.expand import expand_to_parents
-from sutra.retrieval.search import RetrievedChunk, vector_search
+from sutra.retrieval.search import RetrievedChunk, search
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ async def run_chat_turn(
             db, session_id=request.session_id, user_id=request.user_id
         )
         await _save_message(db, session_id=session_id, role="user", content=request.query)
-        chunks: list[RetrievedChunk] = await vector_search(
+        chunks: list[RetrievedChunk] = await search(
             request.query, session=db, settings=settings, embedder=embedder
         )
         # Parent expansion reads the database, so it belongs in this transaction rather than

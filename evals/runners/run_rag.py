@@ -15,7 +15,7 @@ import json
 import logging
 import statistics
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -48,7 +48,7 @@ from sutra.ingestion.parse import parse_corpus
 from sutra.llm.client import LLMClient
 from sutra.prompts import PromptLoader
 from sutra.retrieval.expand import expand_to_parents
-from sutra.retrieval.search import vector_search
+from sutra.retrieval.search import search
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,11 @@ class Profile(BaseModel):
     index_version: int = 1
     # Swap retrieved children for their parents before generating (ARCHITECTURE §4 step 6).
     expand_to_parent: bool = False
+    # Which retriever to run (step 3). Kept on the profile so an ablation of the halves
+    # against the whole is three yaml files, not three branches of code.
+    retrieval_mode: Literal["vector", "keyword", "hybrid"] = "vector"
+    candidate_k: int = 20
+    rrf_k: int = 60
     prompt_version_answer: str = "v1"
     judges: list[JudgeName] = Field(default_factory=lambda: list(JUDGE_NAMES))
     concurrency: int = 4
@@ -89,6 +94,9 @@ class Profile(BaseModel):
                 "retrieval_top_k": self.top_k,
                 "index_version": self.index_version,
                 "retrieval_expand_to_parent": self.expand_to_parent,
+                "retrieval_mode": self.retrieval_mode,
+                "retrieval_candidate_k": self.candidate_k,
+                "rrf_k": self.rrf_k,
                 "prompt_version_answer": self.prompt_version_answer,
             }
         )
@@ -265,7 +273,7 @@ async def _run_row(
     async with semaphore:
         factory = get_sessionmaker()
         async with factory() as db:
-            chunks = await vector_search(
+            chunks = await search(
                 row.question,
                 session=db,
                 k=profile.top_k,
