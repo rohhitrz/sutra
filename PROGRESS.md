@@ -4,7 +4,8 @@
 
 ## Current phase
 **Phase 5 — Generation, context management, memory** · Status: ⬜ not started
-(Phase 4 complete: Langfuse tracing, SSE streaming, feedback, JSON logs)
+(Phase 4 complete: Langfuse tracing, SSE streaming, feedback, JSON logs. The two items Phase 4
+left in front of Phase 5 — known issues 19 and 20 — are closed; see the next-step section.)
 
 ## Phase status
 
@@ -42,6 +43,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-21 | step 6 — `routed`, query router + doc-type filters | 72.2% | 76.6% | 0.567 | 0.988 | 0.821 | 3523 ms | $0.00112 |
 | **2026-10-21** | **`advanced` — the Phase 3 profile** | **77.8%** | **83.7%** | **0.571** | 0.976 | 0.857 | 3550 ms | $0.00091 |
 | 2026-10-21 | `advanced` re-run **after Phase 4 tracing** — no behaviour change intended | 78.2% | 83.3% | 0.565 | 0.976 | 0.821 | 3213 ms | $0.00121 |
+| 2026-10-21 | `advanced` **repeat**, rewrite still on — the comparison point for the row below | 78.2% | 83.3% | 0.570 | 0.988 | 0.821 | 2793 ms | $0.00119 |
+| **2026-10-21** | **`hyde_only` — `advanced` with query rewriting off. Now what `advanced` is.** | **79.0%** | **84.1%** | **0.574** | 0.964 | 0.821 | 2706 ms | $0.00093 |
 
 **The faithfulness column changes meaning at the last row.** Rows above it were graded by
 `judge_faithfulness.v1`; from step 4 onward the default is v2, which must quote the span
@@ -75,6 +78,58 @@ depend only on the index, which was verified byte-identical (same 49 chunks, sam
 token counts).
 
 The judge and latency columns moved for ordinary run-to-run reasons, not because of the fixes.
+
+### Settling query rewriting (known issue 19, closed)
+
+Phase 3 dropped the rewrite stage and `advanced.yaml` kept it on anyway, because the flag that
+drives multi-query is `query_rewrite_enabled` and the profile's own header claimed it was off.
+Phase 3 had measured rewrite *without* HyDE (step 5a, byte-identical to step 4) and rewrite
+*with* HyDE (step 5b, kept) and never isolated HyDE alone — so the stage ran for all of Phase 4
+on a measurement that could not speak to it.
+
+`hyde_only.yaml` is `advanced.yaml` with that one flag flipped and nothing else changed. Read
+against a **repeat** of `advanced`, not the single recorded row, because HyDE is a model call in
+front of the retriever and the retrieval metrics are stochastic for this family (known issue 3):
+
+| | advanced run 1 | advanced run 2 | hyde_only |
+|---|---|---|---|
+| recall@5 | 78.2% | 78.2% | **79.0%** |
+| context recall | 83.3% | 83.3% | **84.1%** |
+| MRR | 0.565 | 0.570 | 0.574 |
+| hit rate@5 | 88.1% | 90.5% | 92.9% |
+| faithfulness | 0.976 | 0.988 | 0.964 |
+| relevance | 1.000 | 1.000 | 0.988 |
+| answer correctness | 0.821 | 0.821 | 0.821 |
+| p50 latency | 3213 ms | 2793 ms | 2706 ms |
+| wall clock | 265 s | 259 s | **213 s** |
+
+**Neutral, so it is off.** Nothing moved beyond what two identical runs of `advanced` already
+move between themselves — hit rate@5 shifted 2.4pp across that identical pair, which is the
+whole of hyde_only's apparent gain on it. Answer correctness is identical to the digit across
+all three. The faithfulness and relevance dips are 0.024 and 0.012, inside the ±0.05 band.
+
+**The saving is not the headline cost delta.** The run totals differ by $0.0109, but
+`hyde_only` met 113,739 cached input tokens against the repeat's 3,235 (known issue 3b), so
+most of that is prefix-cache warmth rather than work avoided. The honest number is the stage's
+own spend, read per-stage out of the traces:
+
+| stage | calls | input tok | output tok | cost | model time |
+|---|---|---|---|---|---|
+| `rewrite` (removed) | 42 | 15,867 | 2,823 | **$0.0030** | **114 s** |
+| `answer` | 42 | 125,862 | 6,275 | — | 143 s |
+| `judge_faithfulness` | 42 | 140,544 | 25,583 | — | 461 s |
+
+So: **42 LLM calls, $0.0030 and 114s of model time per run**, for a stage that produced no extra
+query at all in 33 of 42 rows — an average of 0.21 additional queries per question, bought with
+a model call on every one. Wall clock fell 46s, which is more than 114s/4 concurrency predicts,
+because a row that did get extra queries also paid for extra retrievals.
+
+`advanced.yaml` now carries `query_rewrite_enabled: false`, which makes it settings-identical to
+`hyde_only.yaml`. Both are kept: the ablation profile is the file that records which flag moved,
+and `evals/reports/2026-10-21_hyde_only.*` is the report for the configuration `advanced` now
+has. The dated `2026-10-21_advanced.*` on disk is the **repeat with rewrite still on**, which no
+longer matches the profile of that name — the two runs are also kept beside it as
+`2026-10-21_advanced.run1.*` and `.run2.*` (reports are gitignored, so this is local only).
 
 ### The Phase 4 confirmation run — tracing cost nothing measurable
 
@@ -471,6 +526,36 @@ The blocking-embedder fix matters more from Phase 3 on than it did here: the cro
 reranker is far heavier than the embedder and lands on the same event loop. `embed_passages` in
 ingestion is still synchronous and deliberately so — it runs in a CLI script, not a request.
 
+## What was built (after Phase 4, before Phase 5)
+
+Two known issues the first real look at the traces turned up (19 and 20), closed together.
+
+- `src/sutra/observability/tracing.py` — `_GatedStage`, which wraps every span handed to a
+  call site so `span.update(output=...)` obeys `TRACING_CAPTURE_CONTENT`. The flag previously
+  gated inputs only, so the `generate` span shipped the full answer text with capture off.
+  `on_generation` now sends `input` and `output` through the same gate.
+- `src/sutra/llm/types.py` — `GenerationRecord.input` / `.output`.
+- `src/sutra/llm/client.py` — `_as_prompt` (messages as dicts, the shape Langfuse renders as a
+  chat log) and content threaded through `complete`, `structured`, `stream` and both failure
+  paths in `_call_with_retries`.
+- `src/sutra/retrieval/search.py` — `fusion` gains its input; `multi_query_fusion` gains the
+  n-query equivalent of `fusion`'s breakdown, including `contributed`; `embed_query` gains an
+  output.
+- `src/sutra/retrieval/expand.py` — `expand_to_parents` gains `parents_requested` /
+  `parents_found`, which is where a dangling parent id becomes visible on the span rather than
+  only in a log warning.
+- `evals/runners/run_rag.py` — the `eval.row` root span gains an output: the answer, the
+  refusal flag, recall, context recall and the judge scores, so scanning a run for the rows
+  that went wrong does not mean opening 42 traces.
+- `evals/profiles/hyde_only.yaml` — the HyDE-without-rewrite ablation Phase 3 never ran.
+- `evals/profiles/advanced.yaml` — `query_rewrite_enabled: false`, and a header that now
+  states what was measured instead of the claim that was wrong.
+- Tests: 11 new (468 total). The gate in both directions, metadata passing through either way,
+  the proxy, and content on all three client paths plus the retryable and non-retryable
+  failures. The retrieval-side span additions are verified from `events_full` rather than by
+  test — the suite has no span assertions for retrieval and adding DB-mocking scaffolding for
+  observational metadata was not worth it.
+
 ## What was built (Phase 4)
 
 - `src/sutra/observability/` — the module that was a stub since Phase 0:
@@ -562,7 +647,19 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 
 ## Verified in this chat
 
-Against the live stack, not by inspection:
+Against the live stack, not by inspection. **The first three items are from the chat that
+closed known issues 19 and 20; the rest are Phase 4's.**
+
+- **All six generation spans carry their prompt and their completion**, read out of
+  `events_full` (the v4 list API omits both — known issue 15). `rewrite`, `hyde`, `answer`,
+  `judge_faithfulness`, `judge_relevance`, `judge_correctness`, each non-zero on both sides.
+  HyDE's invented passage is now readable on HyDE's own span.
+- **`TRACING_CAPTURE_CONTENT=false` now closes both sides.** Re-ran with it off: every span
+  reports 0 bytes of input and 0 of output while `usage_details` still arrives. Before the
+  change the `generate` span's answer text went out regardless of the flag.
+- **The rewrite stage's price, per stage rather than per run.** 42 calls, 15,867 input and
+  2,823 output tokens, $0.0030, 114s of model time — queried from `events_full` grouped by
+  `session_id` and `name`, which is how the cache-warmth confound in the run totals was caught.
 
 - **The Langfuse stack starts** (4.67.0, all seven services healthy) and the auto-provisioned
   `LANGFUSE_INIT_*` keys authenticate. Two defects fixed to get there — see known issue 8.
@@ -703,40 +800,51 @@ Against the live stack, not by inspection:
     but it means a caller that builds an `LLMClient` before `set_tracer` gets the no-op. The
     client defaulting to `get_tracer()` makes that the only remaining way to lose generations.
 
-19. **`advanced.yaml` runs query rewriting, which Phase 3 measured as contributing nothing —
-    and this file said it was off.** `query_rewrite_enabled: true` *is* multi-query (it is the
-    flag that drives `multi_query_count`); only `router_enabled` is off. Measured over the
-    42-row `advanced-20261021-164336` run by counting `hybrid_search` spans per row:
+19. ~~**`advanced.yaml` runs query rewriting, which Phase 3 measured as contributing nothing
+    — and this file said it was off.**~~ **Closed.** Measured and dropped: `advanced.yaml` now
+    has `query_rewrite_enabled: false`. The ablation Phase 3 never ran is `hyde_only.yaml`, and
+    the comparison is a repeat of `advanced` rather than the recorded row because the metrics
+    are stochastic here. Neutral on every quality metric (correctness identical to the digit);
+    the stage's own spend was 42 LLM calls, $0.0030 and 114s of model time per run, producing
+    no extra query at all in 33 of 42 rows. Full numbers in the scoreboard section above.
 
-    | extra queries the rewrite produced | rows |
-    |---|---|
-    | **none** — only the question and the HyDE passage | **33 of 42 (79%)** |
-    | one | 1 |
-    | two | 8 |
+    One thing the closing measurement exposed: the headline cost delta between the two runs
+    ($0.0109) is mostly prefix-cache warmth, not work avoided — 113,739 cached input tokens
+    against 3,235. Known issue 3b said cost is not a stable measurement and this is the first
+    time it would have produced a wrong conclusion if read straight.
 
-    Cost for that: **42 LLM calls, $0.003, 112s of model time per run.** Step 5a measured the
-    same stage alone as byte-identical to step 4 and dropped it.
+20. ~~**No generation span records its prompt or its completion.**~~ **Closed.**
+    `GenerationRecord` carries `input` and `output`, `LLMClient` fills them on all three paths
+    (`complete`, `structured`, `stream`) and on the failure paths too — a non-retryable 400 is
+    almost always about the prompt, which was the one thing not recorded. All six generations
+    (`rewrite`, `hyde`, `answer`, the three judges) verified populated on both sides in
+    `events_full`; HyDE's fabricated passage is now visible on its own span rather than only
+    via the next stage's input.
 
-    **But its contribution *alongside* HyDE has never been measured.** Step 5a was rewrite
-    without HyDE; step 5b was rewrite plus HyDE; there is no HyDE-only profile. So this is an
-    unmeasured cost, not a proven waste — and one eval run settles it. See the next step.
+    The smaller holes went with it: `fusion` has its input, so its
+    `from_both`/`dense_only`/`lexical_only` breakdown reads as a ratio;
+    `multi_query_fusion` has the equivalent over n queries, including `contributed` — how many
+    of the extra queries put anything into the surviving pool, which is the per-request form of
+    the measurement known issue 19 settled in aggregate; and `embed_query`,
+    `expand_to_parents` and `eval.row` have outputs.
 
-20. **No generation span records its prompt or its completion.** All six — `rewrite`, `hyde`,
-    `answer`, `judge_faithfulness`, `judge_relevance`, `judge_correctness` — have empty
-    `input` and `output` (verified in `events_full`). Model, tokens, cost, latency and prompt
-    version are all there, which satisfies ARCHITECTURE §10's list, but the thing you actually
-    open a trace for — what was sent and what came back — is absent. `TRACING_CAPTURE_CONTENT`
-    exists for exactly this and is not yet wired to it.
+    **`TRACING_CAPTURE_CONTENT` did not mean what known issue 17 claimed, and now does.** It
+    gated span *inputs* only. `generate` put the full answer text on its output through
+    `span.update`, which the flag never touched, so "capture off" still shipped answers. Spans
+    handed to call sites are now wrapped in a gate, so the next span someone adds cannot
+    forget it. Verified: with the flag off every span reports 0 bytes on both sides while
+    model, tokens and cost still arrive.
 
-    The cost of this gap is concrete: HyDE fabricated a detailed false passage on row
-    `02253c9d348515304c5076cfcfe165db` ("population of 3,280… 740 residents… Ford magistrates…
-    spring of 1145" — none of those strings occur anywhere in the corpus), and that was only
-    visible because the *next* stage happened to record its input. On its own span, HyDE's
-    output is blank.
+    Deliberate consequence: with the flag off, *structural* outputs go too (`{"fused": 20}`,
+    `{"dims": 384}`). Telling structural from sensitive would be a judgement call at every
+    call site, and `input` has always behaved this way — `input={"dense": 20, "lexical": 20}`
+    was already dropped. Consistency over cleverness.
 
-    Smaller holes in the same family: `fusion` has no input; `multi_query_fusion` reports only
-    `fused`, without the `from_both`/`dense_only`/`lexical_only` breakdown that `fusion` has;
-    `embed_query`, `expand_to_parents` and `eval.row` have no output.
+21. **`sutra.observability.tracing.generation_scope` is dead code.** Noticed while wiring known
+    issue 20. `LLMClient` opens its generation spans through `self._tracer.stage` directly and
+    nothing calls `generation_scope`; it also has no `input` parameter, so it was never the
+    seam the content fix could have used. Left in place rather than deleted — removing it needs
+    the usual ask — but it should go.
 
 18. **The `meta` SSE frame departs from ARCHITECTURE §5 in two documented ways.** §5 describes
     it as "trace_id, cost, cache_hit". Cost is on `done` instead, because `meta` is sent before
@@ -746,40 +854,38 @@ Against the live stack, not by inspection:
     it is sent anyway so a client written against §5 needs no change when the cache is turned
     on. Neither is a spec change, so no ADR — but if §5 is ever revised, revise it to say this.
 
-17. **Span inputs and outputs carry the question and the retrieved passages.** Harmless on a
-    fictional corpus and `TRACING_CAPTURE_CONTENT=false` turns it off, but the default is on
-    and would be the wrong default for real data.
+17. **Span inputs and outputs carry the question, the retrieved passages, and now every
+    prompt and completion.** Harmless on a fictional corpus and `TRACING_CAPTURE_CONTENT=false`
+    turns it off — which, since known issue 20, is actually true of the output side as well.
+    The default is on and would be the wrong default for real data, and the content now
+    captured is considerably more than when this item was written.
 
 ## Repo
 - GitHub: https://github.com/rohhitrz/sutra (public)
 
 ## Next step
 
-**Phase 4 is done**, and reading its traces in the UI immediately found two things that are
-worth doing *before* Phase 5 — both are small and one of them makes the pipeline cheaper:
+**Phase 4 is done, and so are both items it left in front of Phase 5.** Known issues 19 and
+20 are closed:
 
-**A. Settle whether query rewriting earns its place (known issue 19).** One eval run:
-`advanced` with `query_rewrite_enabled: false`, everything else identical. It is the ablation
-Phase 3 never ran — step 5a tested rewrite without HyDE, step 5b tested rewrite *with* HyDE,
-and nothing isolated HyDE alone. Today the stage adds no query at all in 79% of rows and costs
-42 LLM calls per run. If the run comes back neutral, turn it off: free latency and cost.
-Remember the metrics are now stochastic (known issue 3), so read it against a repeat of
-`advanced` rather than against the single recorded row.
+- **Query rewriting is off.** Measured against a repeat of `advanced` with `hyde_only.yaml`;
+  neutral on every quality metric, so the 42 LLM calls, $0.0030 and 114s of model time per run
+  are gone. `advanced.yaml` now has `query_rewrite_enabled: false` and is settings-identical to
+  `hyde_only.yaml`.
+- **Generation spans record their prompts and completions**, gated by
+  `TRACING_CAPTURE_CONTENT` — which now gates span outputs generally, as it did not before.
 
-**B. Record generation input and output (known issue 20).** All six generation spans are blank
-on both sides, so no trace can show the prompt that was actually sent. Gate it on
-`TRACING_CAPTURE_CONTENT`, which exists for this. Fill the small holes in the same pass:
-`fusion` input, the `multi_query_fusion` breakdown, and outputs on `embed_query`,
-`expand_to_parents` and `eval.row`.
-
-Then start **Phase 5 — Generation, context management, memory** with the opening prompt in
-`docs/BUILD_PLAN.md`. Carry these in:
+**Phase 5 starts clean.** Begin **Phase 5 — Generation, context management, memory** with the
+opening prompt in `docs/BUILD_PLAN.md`. Carry these in:
 
 - **The traces answer Phase 3's open latency question, and the answer is not retrieval.** On an
   `advanced` turn, `retrieve` spends ~10.8s of which `route` is 3.8s, the query transforms 4.3s
   and the cross-encoder 2.4s — while the actual hybrid search is **0.2s**. The model-backed
   stages are the cost. No aggregate latency number in the eval reports could have said that,
-  and it is the first thing to look at if Phase 5 needs budget.
+  and it is the first thing to look at if Phase 5 needs budget. **Those figures predate the
+  rewrite drop:** the transforms are now HyDE alone, which the traces price at 107–117s of
+  model time across 42 rows (~2.6s per row), so the transform share is roughly halved and the
+  cross-encoder is now the second-largest stage after the answer call.
 - **Phase 3's two unexplained results are now investigable.** Temporal lost 28.6pp at step 4 and
   never recovered; multi-hop moved in both directions. Both are per-stage retrieval questions,
   and each eval row now has a span tree. Filter Langfuse by `profile:advanced` and the row's
@@ -802,13 +908,31 @@ Then start **Phase 5 — Generation, context management, memory** with the openi
 Leftovers:
 
 - `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known issue 13).
-- `router_enabled` remains implemented, off, and documented as losing here. **The companion
-  claim about `multi_query` was wrong and is corrected in known issue 19** — it is *on* in
-  `advanced.yaml`.
+- `router_enabled` remains implemented, off, and documented as losing here. The companion
+  claim about `multi_query` was wrong for two phases; it is now *measured* and off, and the
+  profile header says what moved (known issue 19, closed). The stage itself stays in the tree
+  behind its flag, like routing.
+- `hyde_only.yaml` is settings-identical to `advanced.yaml` now that the flag has moved. Kept
+  deliberately as the ablation's record; say so rather than treating it as a duplicate to tidy.
+- `generation_scope` in `observability/tracing.py` is dead code (known issue 21).
 - The `--limit` report-overwrite guard is one-sided (known issue 14).
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — between 4 and 5 — known issues 19 and 20 closed.**
+  Query rewriting is off: `hyde_only.yaml` against a repeat of `advanced` came back neutral on
+  every quality metric (correctness identical to the digit), so the stage's 42 LLM calls,
+  $0.0030 and 114s of model time per run are gone — a stage that had been adding no query at
+  all in 33 of 42 rows, kept on for two phases by a Phase 3 measurement that never separated
+  it from HyDE. **The run totals would have given the wrong reason:** they differ by $0.0109,
+  but `hyde_only` met 113,739 cached input tokens against 3,235, so most of that is prefix
+  cache and not work avoided — known issue 3b's first real bite. All six generation spans now
+  carry their prompt and completion, which makes HyDE's fabrications visible on HyDE's own
+  span instead of only via the next stage's input. Wiring that found that
+  `TRACING_CAPTURE_CONTENT` never gated the output side at all, so "capture off" had been
+  shipping answer text; the gate now lives on the span object rather than at each call site.
+  468 tests, lint clean.
 
 - **2026-10-21 — Phase 4 — DONE. Tracing, streaming, feedback.**
   The Langfuse stack had never been started (known issue 8) and two defects were waiting
