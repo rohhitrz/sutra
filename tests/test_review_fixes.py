@@ -8,12 +8,102 @@ is not a guard.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 from evals.runners.run_rag import Profile
 from pydantic import ValidationError
 
-from sutra.config import Settings
+from sutra.config import CONTEXT_PREFIX_BUDGET_TOKENS, EMBEDDING_MAX_SEQUENCE_TOKENS, Settings
+from sutra.ingestion.run import _trim_prefixes_to_budget
 from sutra.llm.client import LLMClient, client_scope
+
+# --------------------------------------------------------------------------- finding 2
+
+
+def test_semantic_strategy_without_parent_child_is_refused(settings: Settings) -> None:
+    """The defect: the flat builder ignores `chunk_strategy` while the fingerprint records it,
+    so `--strategy semantic` alone built a recursive index stamped "semantic"."""
+    with pytest.raises(ValidationError, match="requires parent_child_enabled"):
+        Settings(**{**settings.model_dump(), "chunk_strategy": "semantic"})
+
+
+def test_semantic_strategy_with_parent_child_is_accepted(settings: Settings) -> None:
+    """Negative control: the guard must reject only the combination that cannot be honoured."""
+    accepted = Settings(
+        **{**settings.model_dump(), "chunk_strategy": "semantic", "parent_child_enabled": True}
+    )
+    assert accepted.chunk_strategy == "semantic"
+
+
+# --------------------------------------------------------------------------- finding 3
+
+
+def test_contextual_prefixes_count_against_the_embedder_ceiling(settings: Settings) -> None:
+    """The defect: the validator measured the bare chunk, but the embedded unit is prefix +
+    chunk. At the default 400 + 60 the chunk fits and the real input does not."""
+    base = {**settings.model_dump(), "chunk_tokens": 400, "chunk_overlap": 60}
+    # Without prefixes this configuration is fine, and stays fine.
+    assert Settings(**base).chunk_tokens == 400
+    with pytest.raises(ValidationError, match="context prefix reserve"):
+        Settings(**{**base, "contextual_prefixes_enabled": True})
+
+
+def test_parent_child_plus_prefixes_still_fits(settings: Settings) -> None:
+    """Negative control: the measured configuration — slot 3 — must remain legal.
+
+    200 + 40 + 128 = 368, comfortably under 512. If this ever fails the reserve has outgrown
+    the child budget and the index would have to be rebuilt, not the check relaxed.
+    """
+    accepted = Settings(
+        **{
+            **settings.model_dump(),
+            "parent_child_enabled": True,
+            "chunk_strategy": "semantic",
+            "contextual_prefixes_enabled": True,
+            "child_tokens": 200,
+            "child_overlap": 40,
+        }
+    )
+    budget = accepted.child_tokens + accepted.child_overlap + CONTEXT_PREFIX_BUDGET_TOKENS
+    assert budget <= EMBEDDING_MAX_SEQUENCE_TOKENS
+
+
+class _WordCounter:
+    """One token per word, so the budget arithmetic in the test is readable."""
+
+    def count_tokens(self, text: str) -> int:
+        return len(text.split())
+
+    @property
+    def dims(self) -> int:
+        return 384
+
+    def embed_passages(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[0.0] * 384 for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return [0.0] * 384
+
+
+def test_an_overlong_prefix_is_trimmed_and_the_chunk_is_not() -> None:
+    """The reserve is only a guarantee if something enforces it. The prefix is retrieval
+    scaffolding and may lose its tail; the chunk is the indexed content and may not."""
+    long_prefix = " ".join(f"w{i}" for i in range(CONTEXT_PREFIX_BUDGET_TOKENS + 40))
+    rows: list[dict[str, object]] = [
+        {"context_prefix": long_prefix, "text": "the body", "metadata": {"doc_slug": "d"}},
+        {"context_prefix": "short prefix", "text": "the body", "metadata": {"doc_slug": "d"}},
+        {"context_prefix": None, "text": "the body", "metadata": {"doc_slug": "d"}},
+    ]
+
+    assert _trim_prefixes_to_budget(rows, _WordCounter()) == 1
+    assert len(str(rows[0]["context_prefix"]).split()) == CONTEXT_PREFIX_BUDGET_TOKENS
+    assert str(long_prefix).startswith(str(rows[0]["context_prefix"]))
+    # Untouched: within budget, and absent.
+    assert rows[1]["context_prefix"] == "short prefix"
+    assert rows[2]["context_prefix"] is None
+    assert all(r["text"] == "the body" for r in rows)
+
 
 # --------------------------------------------------------------------------- finding 4
 

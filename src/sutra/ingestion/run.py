@@ -27,7 +27,7 @@ from sqlalchemy import Table, delete, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sutra.config import TSV_CONFIG, Settings, get_settings
+from sutra.config import CONTEXT_PREFIX_BUDGET_TOKENS, TSV_CONFIG, Settings, get_settings
 from sutra.db.engine import get_sessionmaker
 from sutra.db.models import Chunk as ChunkRow
 from sutra.db.models import Document as DocumentRow
@@ -77,6 +77,10 @@ class IngestionSummary(BaseModel):
     # How many chunks got a generated context prefix this run (step 2). Zero when
     # contextual retrieval is off, and also when every prefix came from the cache.
     context_prefixes: int = 0
+    # Prefixes that overran the reserved budget and lost their tail. Reported rather than only
+    # logged: a non-zero count means the index was built from trimmed scaffolding, which is a
+    # fact about the measurement, not a warning to scroll past.
+    context_prefixes_trimmed: int = 0
 
 
 class IngestionBlocked(RuntimeError):
@@ -131,6 +135,21 @@ async def _occupied_slot(session: AsyncSession, index_version: int) -> OccupiedS
         return OccupiedSlot(raw=stored, fingerprint=IndexFingerprint.model_validate(stored))
     except ValidationError:
         return OccupiedSlot(raw=stored, fingerprint=None)
+
+
+async def read_slot_fingerprint(index_version: int) -> OccupiedSlot | None:
+    """The fingerprint an index slot actually holds, on its own session.
+
+    # CONCEPT: An index's identity is a property of the index, not of whoever is reading it.
+    # Anything reporting on a slot — an eval report above all — has to ask the slot, because
+    # recomputing the fingerprint from the current config answers a different question:
+    # "what would this configuration build?" rather than "what is in there?". Those two
+    # coincide only right after `make ingest`, and an eval profile selecting slot 3 while the
+    # developer's `.env` still describes slot 1 is the ordinary case, not an edge case.
+    """
+    factory = get_sessionmaker()
+    async with factory() as session:
+        return await _occupied_slot(session, index_version)
 
 
 async def _upsert_documents(
@@ -214,7 +233,7 @@ async def ingest(
 
         build = _parent_child_rows if settings.parent_child_enabled else _flat_rows
         rows = build(documents, document_ids, settings, embedder, fingerprint, slot)
-        prefixes_written = await _contextualise_and_embed(
+        prefixes_written, prefixes_trimmed = await _contextualise_and_embed(
             session, rows, documents, settings, embedder
         )
 
@@ -247,6 +266,7 @@ async def ingest(
         documents=len(documents),
         chunks=len(rows),
         context_prefixes=prefixes_written,
+        context_prefixes_trimmed=prefixes_trimmed,
     )
 
 
@@ -270,7 +290,13 @@ def _flat_rows(
     fingerprint: IndexFingerprint,
     slot: int,
 ) -> list[dict[str, object]]:
-    """One row per chunk, no hierarchy — the Phase 2 shape, and what slot 1 holds."""
+    """One row per chunk, no hierarchy — the Phase 2 shape, and what slot 1 holds.
+
+    This path always chunks recursively: semantic splitting is implemented on the parent-child
+    path only. `Settings` refuses `chunk_strategy='semantic'` without `parent_child_enabled`
+    rather than letting it land here, because the fingerprint records the *requested* strategy
+    and would otherwise stamp "semantic" on a recursive index.
+    """
     rows: list[dict[str, object]] = []
     for doc in documents:
         chunks = chunk_document(
@@ -403,8 +429,10 @@ async def _contextualise_and_embed(
     documents: list[ParsedDocument],
     settings: Settings,
     embedder: Embedder,
-) -> int:
-    """Fill `context_prefix` and `embedding` on every searchable row. Returns prefixes written.
+) -> tuple[int, int]:
+    """Fill `context_prefix` and `embedding` on every searchable row.
+
+    Returns (prefixes written, prefixes trimmed to the token budget).
 
     Parents are skipped: they are context units, never searched, and deliberately carry no
     embedding. Everything else is embedded from the *contextualised* text while the stored
@@ -413,7 +441,7 @@ async def _contextualise_and_embed(
     """
     searchable = [r for r in rows if not cast(dict, r["metadata"]).get("is_parent", False)]
     if not searchable:
-        return 0
+        return 0, 0
 
     written = 0
     if settings.contextual_prefixes_enabled:
@@ -463,6 +491,7 @@ async def _contextualise_and_embed(
 
     from sutra.ingestion.contextualize import contextualised_text
 
+    trimmed = _trim_prefixes_to_budget(searchable, embedder)
     texts = [
         contextualised_text(cast("str | None", r["context_prefix"]), cast(str, r["text"]))
         for r in searchable
@@ -471,7 +500,41 @@ async def _contextualise_and_embed(
     vectors = await asyncio.to_thread(embedder.embed_passages, texts)
     for row, vector in zip(searchable, vectors, strict=True):
         row["embedding"] = vector
-    return written
+    return written, trimmed
+
+
+def _trim_prefixes_to_budget(rows: list[dict[str, object]], embedder: Embedder) -> int:
+    """Hold every prefix inside `CONTEXT_PREFIX_BUDGET_TOKENS`. Returns how many were trimmed.
+
+    # CONCEPT: Where a soft bound cannot be trusted, put a hard one beside it. `Settings`
+    # reserves this many tokens for the prefix so the chunk budget plus the reserve provably
+    # fits the embedder's 512-token ceiling — but the prefix is written by a model, so nothing
+    # about the generation step keeps that promise. This is what makes the reserve a guarantee:
+    # a long prefix loses its tail, loudly, instead of the *chunk* losing its tail silently.
+    #
+    # The prefix is the right thing to cut. It is retrieval scaffolding, generated and
+    # discardable; the chunk is the indexed content, and truncating it would mean searching
+    # text the stored row does not contain.
+    """
+    trimmed = 0
+    for row in rows:
+        prefix = cast("str | None", row["context_prefix"])
+        if not prefix or embedder.count_tokens(prefix) <= CONTEXT_PREFIX_BUDGET_TOKENS:
+            continue
+        words = prefix.split()
+        # Shrink by whole words from the end: a prefix cut mid-token reads as a typo in the
+        # index, and binary search over `count_tokens` is not worth it for a rare path.
+        while words and embedder.count_tokens(" ".join(words)) > CONTEXT_PREFIX_BUDGET_TOKENS:
+            words.pop()
+        row["context_prefix"] = " ".join(words)
+        trimmed += 1
+        logger.warning(
+            "context prefix for %s exceeded the %d-token budget and was trimmed to %d words",
+            cast(dict, row["metadata"]).get("doc_slug"),
+            CONTEXT_PREFIX_BUDGET_TOKENS,
+            len(words),
+        )
+    return trimmed
 
 
 def _blocked_message(slot: int, occupied: OccupiedSlot, fingerprint: IndexFingerprint) -> str:
@@ -540,7 +603,14 @@ def main() -> int:
     if overrides:
         # `model_copy` would skip the validator that keeps the embedded unit under the 512-token
         # ceiling, and that check is the whole reason the validator exists.
-        settings = Settings(**{**settings.model_dump(), **overrides})
+        try:
+            settings = Settings(**{**settings.model_dump(), **overrides})
+        except ValidationError as exc:
+            # A rejected flag combination is a usage error, not a crash. Printing the validator's
+            # own message keeps the explanation in one place.
+            for error in exc.errors():
+                print(f"\nBLOCKED\n{error['msg'].removeprefix('Value error, ')}\n", file=sys.stderr)
+            return 1
 
     try:
         summary = asyncio.run(
@@ -567,6 +637,12 @@ def main() -> int:
             + (
                 f", {summary.context_prefixes} context prefixes generated"
                 if summary.context_prefixes
+                else ""
+            )
+            + (
+                f" ({summary.context_prefixes_trimmed} trimmed to the "
+                f"{CONTEXT_PREFIX_BUDGET_TOKENS}-token budget)"
+                if summary.context_prefixes_trimmed
                 else ""
             )
         )

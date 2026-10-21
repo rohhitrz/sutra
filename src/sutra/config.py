@@ -85,6 +85,14 @@ MODEL_CAPABILITIES: dict[str, ModelCapabilities] = {
 # the embedder.
 EMBEDDING_MAX_SEQUENCE_TOKENS = 512
 
+# Tokens reserved for a contextual prefix (Phase 3 step 2), which is prepended before embedding.
+# The embedded unit is prefix + chunk, so the chunk budget alone is not what has to fit under the
+# ceiling above. A *reserve* rather than a measurement: the prefix is model-written and so has no
+# natural bound, and `_contextualise_and_embed` trims any prefix that exceeds this so the
+# arithmetic here is a guarantee instead of an assumption. 128 against a measured maximum of 99
+# over the frozen corpus, which is the headroom a differently-shaped corpus gets before trimming.
+CONTEXT_PREFIX_BUDGET_TOKENS = 128
+
 # # CONCEPT: The text-search configuration decides the stemmer and the stop-word list, and it
 # # has to be the *same one* when the tsvector is built and when the query is parsed. Mismatch
 # # them and the index stems "waystones" to "waystone" while the query does not — no error, no
@@ -285,10 +293,19 @@ class Settings(BaseSettings):
             name_a, size_a = "chunk_tokens", self.chunk_tokens
             name_b, size_b = "chunk_overlap", self.chunk_overlap
 
-        worst_case = size_a + size_b
+        # The prefix is part of the embedded unit, so it is part of the budget. Checking the
+        # bare chunk was the whole defect: at the default 400 + 60 the chunk fits with 52
+        # tokens to spare, and a ~90-token prefix then pushes the real input past 512 — where
+        # the tokenizer truncates the *end* of the chunk, silently, with the fingerprint and
+        # every recall number recorded as if nothing had happened.
+        reserved = CONTEXT_PREFIX_BUDGET_TOKENS if self.contextual_prefixes_enabled else 0
+        worst_case = size_a + size_b + reserved
         if worst_case > EMBEDDING_MAX_SEQUENCE_TOKENS:
+            prefix_term = (
+                f" + context prefix reserve ({CONTEXT_PREFIX_BUDGET_TOKENS})" if reserved else ""
+            )
             msg = (
-                f"{name_a} ({size_a}) + {name_b} ({size_b}) "
+                f"{name_a} ({size_a}) + {name_b} ({size_b}){prefix_term} "
                 f"= {worst_case} exceeds the embedder's {EMBEDDING_MAX_SEQUENCE_TOKENS}-token "
                 "limit; chunks would be silently truncated"
             )
@@ -298,6 +315,19 @@ class Settings(BaseSettings):
                 f"child_tokens ({self.child_tokens}) must be smaller than parent_tokens "
                 f"({self.parent_tokens}); equal sizes make the parent-child split a no-op "
                 "that costs a second row per chunk and buys nothing"
+            )
+            raise ValueError(msg)
+        if self.chunk_strategy == "semantic" and not self.parent_child_enabled:
+            # # CONCEPT: A configuration that cannot be honoured must be refused, not
+            # # approximated. Semantic splitting lives on the parent-child path only, so the
+            # # flat builder ignores `chunk_strategy` entirely — and the index fingerprint
+            # # records it regardless. Accepting this pair would stamp "semantic" on a
+            # # recursive index, which is the one thing the fingerprint exists to prevent:
+            # # two different chunkings comparing equal, or one lying about what it is.
+            msg = (
+                "chunk_strategy='semantic' requires parent_child_enabled; semantic splitting "
+                "is implemented on the parent-child path only, so a flat index would be "
+                "chunked recursively while its fingerprint claimed 'semantic'"
             )
             raise ValueError(msg)
         return self
