@@ -28,6 +28,7 @@ from sutra.generation.schema import Answer
 from sutra.ingestion.embed import Embedder
 from sutra.llm.client import LLMClient
 from sutra.prompts import PromptLoader
+from sutra.retrieval.expand import expand_to_parents
 from sutra.retrieval.search import RetrievedChunk, vector_search
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,10 @@ async def run_chat_turn(
         chunks: list[RetrievedChunk] = await vector_search(
             request.query, session=db, settings=settings, embedder=embedder
         )
+        # Parent expansion reads the database, so it belongs in this transaction rather than
+        # opening a second one after the model call.
+        if settings.retrieval_expand_to_parent:
+            chunks = await expand_to_parents(chunks, session=db)
         await db.commit()
 
     # --- phase 2: generate. No database connection held while this runs.

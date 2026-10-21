@@ -18,7 +18,8 @@ from sutra.db.engine import get_engine, get_sessionmaker
 from sutra.db.models import Chunk as ChunkRow
 from sutra.ingestion.chunk import estimate_tokens
 from sutra.ingestion.embed import get_embedder
-from sutra.ingestion.run import ingest
+from sutra.ingestion.run import CHUNKS_TABLE, ingest
+from sutra.retrieval.expand import expand_to_parents
 from sutra.retrieval.search import vector_search
 
 pytestmark = pytest.mark.integration
@@ -277,3 +278,136 @@ async def test_embedding_runs_off_the_event_loop(stub_index: Settings):
 
     assert seen, "the embedder was never called"
     assert seen[0] != main_thread, "embed_query ran on the event loop thread"
+
+
+# ---------------------------------------------------------------------------
+# parent-child: parents stay out of results, children expand into them
+# ---------------------------------------------------------------------------
+
+PARENT_CHILD_SLOT = 9102
+
+
+@pytest.fixture
+async def parent_child_index(settings: Settings) -> AsyncIterator[Settings]:
+    """A small two-parent, four-child index, written directly rather than through `ingest`.
+
+    Writing the rows here keeps the test about expansion rather than about chunking, and lets
+    the parent text be something a child demonstrably does not contain.
+    """
+    import uuid as uuid_module
+
+    from sqlalchemy import insert, select
+
+    from sutra.db.models import Document as DocumentRow
+
+    configured = settings.model_copy(update={"index_version": PARENT_CHILD_SLOT})
+    factory = get_sessionmaker()
+
+    async def wipe() -> None:
+        async with factory() as session:
+            await session.execute(
+                delete(ChunkRow).where(ChunkRow.index_version == PARENT_CHILD_SLOT)
+            )
+            await session.commit()
+
+    await wipe()
+    async with factory() as session:
+        doc_id = (await session.execute(select(DocumentRow.id).limit(1))).scalar_one()
+        rows = []
+        chunk_no = 0
+        for parent_index in range(2):
+            parent_uuid = uuid_module.uuid4()
+            rows.append(
+                {
+                    "id": parent_uuid,
+                    "document_id": doc_id,
+                    "index_version": PARENT_CHILD_SLOT,
+                    "parent_id": None,
+                    "chunk_no": chunk_no,
+                    "text": f"PARENT {parent_index} containing the full surrounding context",
+                    "embedding": None,
+                    "token_count": 40,
+                    "metadata": {"is_parent": True, "doc_slug": "test"},
+                }
+            )
+            chunk_no += 1
+            for child_index in range(2):
+                rows.append(
+                    {
+                        "id": uuid_module.uuid4(),
+                        "document_id": doc_id,
+                        "index_version": PARENT_CHILD_SLOT,
+                        "parent_id": parent_uuid,
+                        "chunk_no": chunk_no,
+                        "text": f"child {parent_index}.{child_index}",
+                        "embedding": StubEmbedder()._vector(f"child {parent_index}.{child_index}"),
+                        "token_count": 10,
+                        "metadata": {"is_parent": False, "doc_slug": "test"},
+                    }
+                )
+                chunk_no += 1
+        await session.execute(insert(CHUNKS_TABLE), rows)
+        await session.commit()
+
+    yield configured
+    await wipe()
+
+
+async def test_parents_are_never_returned_by_search(parent_child_index: Settings):
+    """Parents carry no embedding because they are context units, not search units. Without
+    the `embedding IS NOT NULL` filter their NULL distance sorts into the top k on a small
+    corpus, and the model is handed rows that were never actually searched."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await vector_search(
+            "child",
+            session=session,
+            k=10,
+            index_version=PARENT_CHILD_SLOT,
+            settings=parent_child_index,
+            embedder=StubEmbedder(),
+        )
+
+    assert len(hits) == 4, "expected only the four children"
+    assert all(not h.text.startswith("PARENT") for h in hits)
+    assert all(h.parent_id is not None for h in hits)
+
+
+async def test_expansion_swaps_children_for_parents_and_dedupes(parent_child_index: Settings):
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await vector_search(
+            "child",
+            session=session,
+            k=4,
+            index_version=PARENT_CHILD_SLOT,
+            settings=parent_child_index,
+            embedder=StubEmbedder(),
+        )
+        expanded = await expand_to_parents(hits, session=session)
+
+    # Four children, two parents: the whole point of deduping.
+    assert len(expanded) == 2
+    assert all(p.text.startswith("PARENT") for p in expanded)
+    # Ranks stay contiguous from 1, or MRR reads a passage as further down than it was.
+    assert [p.rank for p in expanded] == [1, 2]
+    # A parent inherits the best rank among its children, so the order follows the evidence.
+    assert expanded[0].score >= expanded[1].score
+
+
+async def test_expansion_passes_through_a_flat_index(stub_index: Settings):
+    """Safe to call unconditionally: a flat index has no parents, and the caller should not
+    need a mode flag to know that."""
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await vector_search(
+            "where does the Line end?",
+            session=session,
+            k=3,
+            index_version=TEST_SLOT,
+            settings=stub_index,
+            embedder=StubEmbedder(),
+        )
+        expanded = await expand_to_parents(hits, session=session)
+
+    assert [c.chunk_id for c in expanded] == [c.chunk_id for c in hits]

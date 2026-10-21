@@ -12,20 +12,37 @@ instrument, not a first draft, and making it clever would destroy the only refer
 project has.
 
 ## How Sutra implements it
-`search.py` holds `vector_search`, and nothing else. It is scoped to a single `index_version`,
-because an unscoped search over a database holding two index versions blends them and the result
-belongs to no measurable configuration at all.
+`search.py` holds `vector_search`. It is scoped to a single `index_version`, because an
+unscoped search over a database holding two index versions blends them and the result belongs
+to no measurable configuration at all. It also filters on `embedding IS NOT NULL`, which is
+what keeps parent rows out of results.
+
+`expand.py` (Phase 3 step 1) is pipeline step 6: swap each retrieved child for its parent,
+dedupe, and inherit the child's rank. Parent-child chunking without this is just a smaller
+chunk size, and strictly worse.
 
 Deliberately **not** implemented here, and where each arrives:
 
-| Absent from Phase 2 | Arrives |
+| Absent | Arrives |
 |---|---|
-| keyword search over the `tsv` column | Phase 3 (hybrid) |
-| rank fusion across retrievers (RRF) | Phase 3 |
-| cross-encoder reranking (`bge-reranker-base`) | Phase 3 |
-| query rewriting and routing | Phase 3 |
-| parent-child expansion, contextual prefixes | Phase 3 |
-| metadata filters, ACL enforcement | Phase 3 / later |
+| keyword search over the `tsv` column | Phase 3 step 3 (hybrid) |
+| rank fusion across retrievers (RRF) | Phase 3 step 3 |
+| cross-encoder reranking (`bge-reranker-base`) | Phase 3 step 4 |
+| query rewriting and routing | Phase 3 steps 5–6 |
+| contextual prefixes | Phase 3 step 2 |
+| metadata filters, ACL enforcement | Phase 3 step 6 / later |
+
+### Parent-child, and why the headline metric had to change
+Searching 200-token children and answering from their ~800-token parents separates the unit
+that embeds well from the unit that reads well. It also breaks the obvious way of measuring
+retrieval. `recall@k` is computed over the retrieved units, so halving the chunk size means the
+same retriever returns half as much text under the same `k` — the number falls for a reason
+that has nothing to do with retrieval quality.
+
+`context_recall` is the fix: the same quote-level recall, measured over the passages actually
+sent to the generator after expansion. It means the same thing on a flat index and a
+parent-child one, and on a flat index it is identical to `recall@k` by construction. **Compare
+chunking schemes on `context_recall`; compare rankers on `recall@k` and MRR.**
 
 ## Tradeoffs
 - **Dense-only retrieval is weak at exact-token recall.** A rare proper noun or an exact figure
@@ -33,8 +50,12 @@ Deliberately **not** implemented here, and where each arrives:
   topic rather than identity. The corpus is full of such facts on purpose, so the Phase 3 hybrid
   delta should be visible rather than theoretical.
 - **Chunk-size dilution.** At 400 tokens a chunk often spans several wiki sections, so a question
-  about one place competes against embeddings averaging several places. Phase 3's parent-child
-  split is the intended answer, and the baseline is what makes its value measurable.
+  about one place competes against embeddings averaging several places. Parent-child (step 1) is
+  the intended answer, and it worked: context recall 61.9% → 76.2%.
+- **Smaller children cost ranking precision.** Step 1 also moved MRR 0.492 → 0.437 and numeric
+  recall 86.1% → 50.0%. More, shorter units means a denser field of near-identical candidates —
+  worst on the merchant ledger, whose rows genuinely do all resemble each other. Dense retrieval
+  cannot tell `946` from `1,034` at all; that is what step 3's keyword half is for.
 - **The HNSW index is not exercised at this scale.** With 49 chunks the planner filters on
   `index_version` and sorts rather than using the vector index (confirmed with `EXPLAIN`). The
   index is correct and will matter at volume, but nothing in this project tests the
@@ -59,5 +80,17 @@ from an ad-hoc measurement during Phase 2 step 4 — the figures of record are w
 make ingest && make coverage     # the index, and proof the quotes survive it
 make eval                        # the numbers of record
 ```
+
+The parent-child index is a second slot, built and measured alongside the baseline rather than
+replacing it:
+```bash
+python -m sutra.ingestion.run --index-version 2 --parent-child --strategy semantic
+python -m evals.check_coverage --from-db --index-version 2   # both roles must pass
+python -m evals.runners.run --profile semantic
+```
+`make coverage` checks search units and context units **separately** on a parent-child index. A
+parent contains all of its children's text, so a pooled check would pass whenever a quote
+survived anywhere — including when it was split across children and only the parent held it
+whole, which is precisely the defect that silently depresses recall.
 `make eval` after each retrieval change; compare the new scoreboard row against
 `evals/reports/baseline.json`.

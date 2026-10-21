@@ -46,6 +46,9 @@ class RetrievedChunk(BaseModel):
     """
 
     chunk_id: str
+    # The parent this chunk was cut from, when the index is parent-child. None in a flat index
+    # and on parents themselves. `retrieval/expand.py` is what turns it into context.
+    parent_id: str | None = None
     doc_slug: str
     doc_title: str
     doc_type: str
@@ -102,6 +105,7 @@ async def vector_search(
     stmt = (
         select(
             ChunkRow.id,
+            ChunkRow.parent_id,
             ChunkRow.chunk_no,
             ChunkRow.text,
             ChunkRow.token_count,
@@ -113,6 +117,11 @@ async def vector_search(
         )
         .join(DocumentRow, DocumentRow.id == ChunkRow.document_id)
         .where(ChunkRow.index_version == slot)
+        # Parents are stored in the same slot as their children but carry no embedding, because
+        # they are context units rather than search units and are routinely larger than the
+        # embedder's 512-token limit. Without this filter they come back with a NULL distance
+        # and, on a small corpus, pad out the top k with rows that were never searchable.
+        .where(ChunkRow.embedding.is_not(None))
         .order_by(distance)
         .limit(top_k)
     )
@@ -124,6 +133,7 @@ async def vector_search(
     return [
         RetrievedChunk(
             chunk_id=str(row.id),
+            parent_id=str(row.parent_id) if row.parent_id else None,
             # Joined from `documents` rather than read out of chunk metadata: the metadata copy
             # is a denormalised convenience, and the join is the source of truth.
             doc_slug=row.slug,
