@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from evals.check_coverage import check_coverage, chunks_from_db, corpus_text
 from evals.metrics.grounding import GroundingCheck, check_figures
@@ -59,7 +59,15 @@ CORPUS_DIR = REPO_ROOT / "data" / "corpus"
 
 
 class Profile(BaseModel):
-    """One eval configuration (ARCHITECTURE §11)."""
+    """One eval configuration (ARCHITECTURE §11).
+
+    # CONCEPT: A profile is the independent variable of an experiment, so an unrecognised key
+    # in it is not a harmless typo — it is a run that measured something other than what the
+    # file says. `extra="forbid"` is the difference between `rerank_enabed: true` failing at
+    # load and silently producing a no-rerank report filed under `hybrid_rerank`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str = ""
