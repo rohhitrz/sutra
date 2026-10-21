@@ -75,6 +75,10 @@ class Profile(BaseModel):
     # Cross-encoder reranking over the retrieved pool (step 4).
     rerank_enabled: bool = False
     rerank_candidates: int = 20
+    # Query transforms (step 5).
+    query_rewrite_enabled: bool = False
+    multi_query_count: int = 3
+    hyde_enabled: bool = False
     prompt_version_answer: str = "v1"
     judges: list[JudgeName] = Field(default_factory=lambda: list(JUDGE_NAMES))
     concurrency: int = 4
@@ -102,6 +106,9 @@ class Profile(BaseModel):
                 "rrf_k": self.rrf_k,
                 "rerank_enabled": self.rerank_enabled,
                 "rerank_candidates": self.rerank_candidates,
+                "query_rewrite_enabled": self.query_rewrite_enabled,
+                "multi_query_count": self.multi_query_count,
+                "hyde_enabled": self.hyde_enabled,
                 "prompt_version_answer": self.prompt_version_answer,
             }
         )

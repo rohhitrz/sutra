@@ -1,0 +1,31 @@
+# Phase 3 step 5 — query rewriting and decomposition, on top of step 4.
+#
+# Aimed squarely at multi-hop, the one category that has got worse at almost every step of
+# this phase (60.4% at step 1, then 47.9%, 41.7%, 47.9%). A single embedding cannot sit near
+# two unrelated passages at once, so a question needing two facts is asking the retriever to
+# be in two places. This issues one query per fact and fuses the results.
+#
+# The original question always stays in the pool, so a bad rewrite can only cost ranking
+# slots, never the answer.
+#
+# Judge this profile on multi-hop specifically. A headline gain driven by the easy categories
+# would not be the thing this step was built for.
+name: hyde
+description: Hybrid + rerank + multi-query, plus a HyDE hypothetical-answer probe.
+
+top_k: 5
+index_version: 3
+expand_to_parent: true
+retrieval_mode: hybrid
+candidate_k: 20
+rrf_k: 60
+rerank_enabled: true
+rerank_candidates: 20
+query_rewrite_enabled: true
+hyde_enabled: true
+multi_query_count: 3
+
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4

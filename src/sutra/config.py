@@ -143,6 +143,8 @@ class Settings(BaseSettings):
     prompt_version_judge_relevance: str = "v1"
     prompt_version_judge_correctness: str = "v1"
     prompt_version_context_prefix: str = "v1"
+    prompt_version_query_transform: str = "v1"
+    prompt_version_hyde: str = "v1"
 
     # ---- Retrieval / ingestion ----
     # # CONCEPT: Index versioning — re-ingesting under a new version lets old chunks keep serving
@@ -210,6 +212,20 @@ class Settings(BaseSettings):
     # The shortlist handed to the cross-encoder. A reranker can only reorder what it is given,
     # so this, not `retrieval_top_k`, is what bounds how much it can discover.
     rerank_candidates: int = 20
+
+    # ---- Query transforms (Phase 3 step 5) ----
+    # # CONCEPT: Retrieval matches a query against passages, but a user writes a question.
+    # # Pronouns the corpus never uses, context the index does not have, several facts asked
+    # # at once — each is a retrieval problem before it is a generation problem.
+    # Rewrite into standalone queries, decomposing when the answer needs several facts. The
+    # original question always stays in the pool, so a bad rewrite can only cost slots.
+    query_rewrite_enabled: bool = False
+    # Upper bound on queries from the rewriter. Each one is a full retrieval, so this is a
+    # latency and cost dial as much as a recall one.
+    multi_query_count: int = 3
+    # HyDE: embed a hypothetical answer instead of only the question. The draft is never
+    # shown and never indexed — see `retrieval/query_transform.py`.
+    hyde_enabled: bool = False
 
     # ---- Contextual retrieval (Phase 3 step 2) ----
     # # CONCEPT: A fast model writes 1-2 sentences situating each chunk in its document,

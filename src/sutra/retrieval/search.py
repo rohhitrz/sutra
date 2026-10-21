@@ -343,14 +343,41 @@ async def search(
     top_k = k if k is not None else settings.retrieval_top_k
     pool = max(settings.rerank_candidates, top_k) if settings.rerank_enabled else top_k
 
-    hits = await _retrieve(
-        query,
-        session=session,
-        k=pool,
-        index_version=index_version,
-        settings=settings,
-        embedder=embedder,
-    )
+    # # CONCEPT: Multi-query retrieval. A single embedding cannot sit near two unrelated
+    # # passages at once, so a question needing two facts is asking the retriever to be in two
+    # # places. Issuing one query per fact and fusing the results is the obvious fix, and
+    # # nothing cheaper works — which is why this is the stage aimed at multi-hop.
+    from sutra.retrieval.query_transform import gather_queries
+
+    queries = await gather_queries(query, settings=settings)
+    if len(queries) == 1:
+        hits = await _retrieve(
+            query,
+            session=session,
+            k=pool,
+            index_version=index_version,
+            settings=settings,
+            embedder=embedder,
+        )
+    else:
+        from sutra.retrieval.fusion import reciprocal_rank_fusion
+
+        # Sequential, like the hybrid halves and for the same reason: one AsyncSession cannot
+        # have two statements in flight, and a second connection per request is a poor trade
+        # for a query that is not the bottleneck.
+        per_query = [
+            await _retrieve(
+                q,
+                session=session,
+                k=pool,
+                index_version=index_version,
+                settings=settings,
+                embedder=embedder,
+            )
+            for q in queries
+        ]
+        logger.debug("multi-query: %d queries -> pool of %d", len(queries), pool)
+        hits = reciprocal_rank_fusion(per_query, k=settings.rrf_k, limit=pool)
     if not settings.rerank_enabled:
         return hits
 
