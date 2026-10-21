@@ -21,12 +21,31 @@ what keeps parent rows out of results.
 dedupe, and inherit the child's rank. Parent-child chunking without this is just a smaller
 chunk size, and strictly worse.
 
+`keyword_search` (step 3) ranks by Postgres FTS over the `tsv` column, and `fusion.py` merges
+the two ranked lists by Reciprocal Rank Fusion. `search()` dispatches on `retrieval_mode`, so
+an ablation of either half against the whole is a yaml field rather than a branch in code.
+
+### Why RRF rather than adding the scores
+The two retrievers do not produce comparable numbers. Cosine similarity is bounded and
+clusters tightly — the best and fifth-best hits here are routinely 0.72 and 0.68 — while
+`ts_rank_cd` is unbounded and its magnitude depends on how many query terms matched and how
+close together they fell. Summing them is meaningless and per-query normalisation gives a bad
+list's top hit the same 1.0 as a good one's. RRF keeps only the ranks, so **agreement between
+retrievers outranks a single confident vote**, which is what makes the result robust to either
+half being badly wrong on a particular query.
+
+### Postgres FTS is a filter; a retriever has to OR
+`websearch_to_tsquery` and `plainto_tsquery` both AND their terms, so a chunk must contain
+every word of the question to be a candidate at all. Measured rather than assumed: that
+returned **zero hits for 21 of the 42 golden questions**, median 0 — a second opinion silent
+on half the eval. Terms are OR-ed instead and `ts_rank_cd` does the ranking, which is also how
+BM25 behaves. Only `\w+` runs survive, so nothing a user types can reach the tsquery parser
+as an operator.
+
 Deliberately **not** implemented here, and where each arrives:
 
 | Absent | Arrives |
 |---|---|
-| keyword search over the `tsv` column | Phase 3 step 3 (hybrid) |
-| rank fusion across retrievers (RRF) | Phase 3 step 3 |
 | cross-encoder reranking (`bge-reranker-base`) | Phase 3 step 4 |
 | query rewriting and routing | Phase 3 steps 5–6 |
 | metadata filters, ACL enforcement | Phase 3 step 6 / later |
@@ -98,3 +117,19 @@ survived anywhere — including when it was split across children and only the p
 whole, which is precisely the defect that silently depresses recall.
 `make eval` after each retrieval change; compare the new scoreboard row against
 `evals/reports/baseline.json`.
+
+## What the ablation showed (step 3)
+`keyword_only.yaml` exists so the hybrid row means something. It is a worse retriever overall
+(context recall 68.3% against the dense 79.8%) and nobody should ship it — but it is not
+uniformly worse, and the fusion lives entirely in that gap:
+
+| Context recall | dense | keyword only | fused |
+|---|---|---|---|
+| routing | 66.7% | **100.0%** | **100.0%** |
+| temporal | 78.6% | **92.9%** | **92.9%** |
+| numeric | **86.1%** | 72.2% | **86.1%** |
+| single-hop | **91.7%** | 66.7% | **91.7%** |
+
+The fused column takes the better of the two on every one of those. Without the ablation, a
+hybrid that beat the dense baseline could have been beating it because fusion works or because
+FTS alone is simply better on this corpus, and the report could not have told you which.

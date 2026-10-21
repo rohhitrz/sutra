@@ -4,7 +4,7 @@
 
 ## Current phase
 **Phase 3 — Advanced retrieval + routing + semantic cache** · Status: 🟨 in progress
-(**steps 1–2 of 7 done**; step 3 — FTS + RRF hybrid — next)
+(**steps 1–3 of 7 done**; step 4 — cross-encoder rerank — next)
 
 ## Phase status
 
@@ -31,7 +31,9 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-20 | ~~`naive` baseline, as first recorded~~ — **superseded** | 61.9% | — | 0.492 | 0.964 | 0.774 | 2373 ms | $0.00050 |
 | 2026-10-21 | **baseline** — `naive`, vector-only, k=5, answer.v1, slot 1 | 61.9% | 61.9% | 0.492 | 0.976 | 0.774 | 2734 ms | $0.00056 |
 | 2026-10-21 | **step 1** — `semantic`, parent-child + expansion, slot 2 | 63.9% | 76.2% | 0.437 | 0.988 | 0.774 | 2747 ms | $0.00056 |
-| 2026-10-21 | **step 2** — `contextual`, + generated prefixes, slot 3 | **69.4%** | **79.8%** | **0.506** | 0.952 | 0.810 | 2529 ms | $0.00086 |
+| 2026-10-21 | **step 2** — `contextual`, + generated prefixes, slot 3 | 69.4% | 79.8% | 0.506 | 0.952 | 0.810 | 2529 ms | $0.00086 |
+| 2026-10-21 | ablation — `keyword_only`, FTS alone, slot 3 | 61.9% | 68.3% | 0.471 | 1.000 | 0.774 | 2860 ms | $0.00092 |
+| 2026-10-21 | **step 3** — `hybrid`, vector + FTS fused by RRF, slot 3 | **73.0%** | **81.0%** | **0.528** | 0.964 | 0.810 | 2572 ms | $0.00085 |
 
 All three rows above were produced by the **same harness code on the same day**, which earlier
 rows were not. That re-run was forced by a bug found in step 2 (the figure check was flagging
@@ -128,6 +130,44 @@ step 5 (multi-query), both of which bear directly on it.
 **Cost: +6% cache-neutral** ($0.0348 → $0.0368 at list rate), plus a one-off ingestion cost of
 104 fast-model calls. Re-ingestion is free: prefixes are cached by a hash of prompt version,
 document and chunk text.
+
+### Step 3 — keyword FTS + RRF hybrid (slot 3, `hybrid.yaml`)
+
+**Verdict: kept. The best configuration so far, and best on every headline metric** — context
+recall 81.0%, recall@5 73.0%, MRR 0.528, hit rate 83.3%, context precision 20.5% (the only
+profile to beat the baseline on precision). Cost is flat against step 2 (+3% cache-neutral),
+latency unchanged.
+
+**The ablation is what makes the row mean something.** `keyword_only` is a worse retriever
+overall (68.3% context recall against step 2's 79.8%) — nobody should ship it. But it is not
+uniformly worse, and that is the entire basis of the fusion:
+
+| Context recall | naive | step 2 | keyword only | **step 3** |
+|---|---|---|---|---|
+| routing | 44.4% | 66.7% | **100.0%** | **100.0%** |
+| temporal | 64.3% | 78.6% | **92.9%** | **92.9%** |
+| numeric | 86.1% | **86.1%** | 72.2% | **86.1%** |
+| single-hop | 58.3% | **91.7%** | 66.7% | **91.7%** |
+| unanswerable | 83.3% | **100.0%** | 50.0% | 83.3% |
+| multi-hop | 37.5% | 47.9% | 47.9% | 41.7% |
+
+Hybrid takes the lexical half's wins on routing and temporal **and** keeps the dense half's
+wins on numeric and single-hop. That is RRF doing exactly what it is for, and it is only
+visible because the ablation was run.
+
+**Two things it did not fix, stated plainly.**
+
+1. **Multi-hop is now the clear outstanding problem, and it has got worse with every step
+   since step 1**: 37.5% → 60.4% (step 1) → 47.9% (step 2) → 41.7% (step 3). Step 1's larger
+   deduped parents remain the best thing this project has done for multi-hop, and the two
+   techniques since have each eroded it while winning elsewhere. No explanation has survived
+   checking. **This is the thing step 5's multi-query decomposition has to address**, and it
+   should be judged on this number specifically.
+2. **Unanswerable fell 100% → 83.3%.** OR-ed keyword terms always match *something*, so rows
+   that should retrieve nothing now retrieve plausible-looking passages. Refusal recall stayed
+   at 100% and false refusals actually improved (4 → 3), so the model is still refusing
+   correctly — but the guardrail is the model's judgement rather than an empty result set,
+   which is a weaker place for it to live. Worth remembering in Phase 6.
 
 Weakest categories by recall@5 in the baseline: multi-hop 37.5%, routing 44.4%. Strongest:
 numeric 86.1%.
@@ -390,28 +430,29 @@ ingestion is still synchronous and deliberately so — it runs in a CLI script, 
 committed baseline at `evals/reports/baseline.json`, and its numbers are in the scoreboard
 above. 168 tests, lint and types clean, everything pushed.
 
-**Steps 1 and 2 are done and kept** (see the scoreboard). **The immediate next step is Phase 3
-step 3: keyword (FTS) search + RRF hybrid**, measured against slot 3 — `contextual.yaml` is the
-current best profile under the carry-forward rule.
+**Steps 1–3 are done and kept** (see the scoreboard). `hybrid.yaml` is the current best
+profile and the base for step 4 under the carry-forward rule.
 
-What step 3 needs:
+**The immediate next step is Phase 3 step 4: cross-encoder reranking** —
+`bge-reranker-base` (ADR-004) over the top ~20 fused candidates, keeping the top 5
+(ARCHITECTURE §4 step 5). What it needs:
 
-- `keyword_search()` over the existing `tsv` column with `ts_rank_cd` and
-  `websearch_to_tsquery`. The tsvector is already built from the **contextualised** text, so
-  keyword search gets the prefixes too, with no re-ingest needed.
-- `retrieval/fusion.py` — Reciprocal Rank Fusion, k=60, as a pure function. Easy to unit-test
-  and the clearest single teaching artefact in the phase.
-- `retrieval_mode: vector | keyword | hybrid` in config, plus `rrf_k`.
-- ADR-002's "Postgres FTS is not true BM25" caveat belongs in `retrieval/README.md`.
-- An implementation detail to expect: two concurrent queries cannot share one `AsyncSession`.
-  Either run the vector and keyword halves sequentially or give each its own session.
+- `retrieval/rerank.py`, with the model behind an interface like `Embedder` is, and **run off
+  the event loop** — a cross-encoder is far heavier than the embedder, which is why
+  `vector_search`'s `asyncio.to_thread` fix was made before this step rather than after.
+- The candidates to rerank are the *fused* list, so `hybrid_search` needs to return its wider
+  pool rather than cutting to k before the reranker sees it.
+- Expect real latency: 20 cross-encoder passes per query on CPU is the most expensive thing
+  in the pipeline so far. Record p50 honestly against hybrid's 2572 ms.
 
-**The case for step 3 is now weaker than it was**, and that should be said plainly before
-building it. Step 1's numeric regression was the headline argument for keyword search, and
-step 2 already repaired it (numeric context recall is back to the baseline's 86.1%). What is
-left for hybrid to win is exact-token recall on rare proper nouns and figures where dense
-retrieval still has no handle — real, but a smaller target than it looked a day ago. Expect a
-smaller delta, and do not talk it up afterwards if it does not land.
+**Do `judge_faithfulness.v2` first.** This was deferred on the explicit grounds that steps 1–3
+were judged on exact retrieval metrics. Step 4 is the first step whose case may rest on answer
+quality rather than recall, so the judge has to be worth reading before it is used to decide
+anything. That means: the v2 prompt requiring a quoted supporting span, plus the ~10
+hand-labelled rows ARCHITECTURE §11 asks for, validated against both judge versions.
+
+**And judge step 4 on multi-hop specifically** — see the step 3 notes. It is the one category
+that has degraded across the phase.
 
 Settled, and not to be re-litigated:
 
@@ -445,6 +486,20 @@ measured against.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-21 — Phase 3 — step 3 done: keyword FTS + RRF hybrid.**
+  `keyword_search` over the existing tsvector, `fusion.py` (RRF, k=60, pure and exactly
+  testable), and a `search()` entry point dispatching on `retrieval_mode` so the halves can be
+  ablated against the whole. Best configuration so far on every headline metric: context
+  recall 81.0%, recall@5 73.0%, MRR 0.528, hit rate 83.3%, context precision 20.5% — and cost
+  and latency flat. The `keyword_only` ablation is what makes it meaningful: a worse retriever
+  overall (68.3%) that is *better* on routing (100%) and temporal (92.9%), and hybrid keeps
+  both of those while retaining the dense half's numeric and single-hop. Caught before
+  trusting it: `websearch_to_tsquery` ANDs its terms, so 21 of 42 questions returned zero
+  keyword hits and the fusion would have been inert on half the eval — OR-ing the terms took
+  that to 0. Two open problems recorded rather than smoothed over: multi-hop has now degraded
+  at every step since step 1 (60.4% → 47.9% → 41.7%) and is step 5's job, and unanswerable
+  fell 100% → 83.3% because OR-ed terms always match something. 205 tests, lint clean.
 
 - **2026-10-21 — Phase 3 — step 2 done: contextual retrieval prefixes.**
   A fast model writes 1–2 sentences per chunk situating it in its document, prepended before
