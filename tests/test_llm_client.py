@@ -8,6 +8,7 @@ a provider.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from contextlib import contextmanager
 
 import httpx2
 import pytest
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 from sutra.config import Settings
 from sutra.llm.adapters import RawResult
 from sutra.llm.client import LLMClient, LLMError
+from sutra.llm.tracing import NoOpTracer
 from sutra.llm.types import GenerationRecord, Message, StreamDelta, StreamDone
 
 PROMPT = [Message(role="user", content="Who is the Archivist?")]
@@ -97,12 +99,20 @@ class FakeAdapter:
         yield None, self._result(model)
 
 
-class RecordingTracer:
+class RecordingTracer(NoOpTracer):
+    """Captures records, and inherits the no-op `stage` so spans are exercised too."""
+
     def __init__(self) -> None:
         self.records: list[GenerationRecord] = []
+        self.stages: list[tuple[str, object]] = []
 
     def on_generation(self, record: GenerationRecord) -> None:
         self.records.append(record)
+
+    @contextmanager
+    def stage(self, name: str, *, kind=None, input=None, metadata=None):
+        self.stages.append((name, kind))
+        yield None
 
 
 class AnswerSchema(BaseModel):

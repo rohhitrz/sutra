@@ -1,14 +1,17 @@
-"""Tracing hook.
+"""The tracing hook the LLM client calls.
 
-Phase 0 ships only a no-op. Phase 4 replaces it with a Langfuse-backed implementation (ADR-007).
-The hook exists now so that every call site is already instrumented and Phase 4 is a swap
-rather than a hunt through the codebase for call sites to annotate.
+The protocol lives here, next to its one caller, so `sutra.llm` does not import
+`sutra.observability` — the dependency runs the other way, and the client stays usable with
+no observability stack at all. The Langfuse implementation is
+`sutra.observability.tracing.LangfuseTracer`, which satisfies this protocol (ADR-007).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any, Protocol, runtime_checkable
 
 from sutra.llm.types import GenerationRecord
 
@@ -21,9 +24,20 @@ class Tracer(Protocol):
 
     def on_generation(self, record: GenerationRecord) -> None: ...
 
+    def stage(self, name: str, *, kind: Any = ..., input: Any = ..., metadata: Any = ...) -> Any:
+        """Open a span. The client uses this to wrap each call in a `generation` observation.
+
+        # CONCEPT: A generation has to be a span *around* the provider call, not a record
+        # filed after it. Reporting it afterwards gives you the tokens and the cost but a
+        # zero-width span, so the one question a trace exists to answer — which stage spent
+        # the time — is the one it cannot. The client therefore opens the span, makes the
+        # call, and reports the record from inside it.
+        """
+        ...
+
 
 class NoOpTracer:
-    """Does nothing but log at DEBUG. The default until Phase 4."""
+    """Does nothing but log at DEBUG. Used whenever tracing is off or unconfigured."""
 
     def on_generation(self, record: GenerationRecord) -> None:
         logger.debug(
@@ -36,3 +50,9 @@ class NoOpTracer:
             record.attempts,
             record.used_fallback,
         )
+
+    @contextmanager
+    def stage(
+        self, name: str, *, kind: Any = "span", input: Any = None, metadata: Any = None
+    ) -> Iterator[None]:
+        yield None

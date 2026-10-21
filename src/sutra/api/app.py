@@ -17,16 +17,10 @@ from sutra.api.routes_chat import router as chat_router
 from sutra.api.routes_health import router as health_router
 from sutra.config import get_settings
 from sutra.db.engine import dispose_engine
+from sutra.observability.logs import configure_logging
+from sutra.observability.tracing import build_tracer, get_tracer, set_tracer
 
 logger = logging.getLogger(__name__)
-
-
-def configure_logging(level: str) -> None:
-    """Plain logging for now. Phase 4 replaces this with structured JSON logs."""
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
-    )
 
 
 @asynccontextmanager
@@ -38,11 +32,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     useful than refusing to boot.
     """
     settings = get_settings()
-    configure_logging(settings.log_level)
-    logger.info("sutra.startup version=%s env=%s", __version__, settings.app_env)
+    configure_logging(settings.log_level, log_format=settings.log_format)
+    # The process-wide tracer is built once, here, and read through `get_tracer()` by code at
+    # any depth (see the CONCEPT note in `observability.tracing`). It is a working no-op when
+    # tracing is off or unconfigured, so nothing downstream branches on whether it is real.
+    set_tracer(build_tracer(settings))
+    logger.info(
+        "sutra.startup",
+        extra={
+            "version": __version__,
+            "env": settings.app_env,
+            "tracing": settings.tracing_enabled,
+        },
+    )
     try:
         yield
     finally:
+        # Flush before the engine goes: the exporter batches, so spans from the last request
+        # in flight are still buffered and would otherwise be dropped on exit.
+        get_tracer().shutdown()
         await dispose_engine()
         logger.info("sutra.shutdown")
 

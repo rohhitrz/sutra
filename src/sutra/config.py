@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # ---- App ----
     app_env: Literal["local", "ci", "prod"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # # CONCEPT: Structured logs are for machines first. A human reading one line prefers
+    # # `text`, but a line that has to be searched, filtered or correlated by trace_id has to
+    # # be parseable, and reconstructing fields from a format string is guesswork. `json` is
+    # # the default for that reason; `text` stays for staring at a local run.
+    log_format: Literal["json", "text"] = "json"
     sutra_api_key: str = "change-me"
 
     # ---- Postgres (ADR-002) ----
@@ -269,11 +274,19 @@ class Settings(BaseSettings):
     cache_similarity_threshold: float = 0.95
     cache_ttl_hours: int = 168
 
-    # ---- Observability (ADR-007); inert until Phase 4 ----
+    # ---- Observability (ADR-007, ADR-023) ----
     langfuse_host: str = "http://localhost:3000"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    tracing_enabled: bool = False
+    # On by default, because a tracing system nobody switched on traces nothing and the first
+    # thing you reach for it is the request that already went wrong. It is still inert without
+    # keys: `build_tracer` returns the no-op when either key is blank, so tests, CI and anyone
+    # without a Langfuse running are unaffected by this default rather than broken by it.
+    tracing_enabled: bool = True
+    # Spans carry the question and the retrieved passages. On this corpus that is fiction, but
+    # the flag is here because the same switch on a real corpus is the difference between a
+    # useful trace and a privacy incident.
+    tracing_capture_content: bool = True
 
     @model_validator(mode="after")
     def _chunks_must_fit_the_embedder(self) -> Settings:

@@ -11,8 +11,8 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from typing import TypeVar
 
 from openai import (
@@ -158,6 +158,7 @@ class LLMClient:
         used_fallback: bool,
         streamed: bool = False,
         error: str | None = None,
+        prompt_version: str | None = None,
     ) -> float:
         latency_ms = (time.perf_counter() - started) * 1000
         self._tracer.on_generation(
@@ -170,9 +171,28 @@ class LLMClient:
                 used_fallback=used_fallback,
                 streamed=streamed,
                 error=error,
+                prompt_version=prompt_version,
             )
         )
         return latency_ms
+
+    @contextmanager
+    def _generation_span(
+        self, *, stage: str | None, role: ModelRole | None, model: str | None
+    ) -> Iterator[None]:
+        """The span one provider call happens inside.
+
+        Opened here rather than filled in afterwards: the span's duration has to be the
+        call's duration, or a trace cannot say which stage spent the time. `stage` names it
+        (`generate`, `route`, `rewrite`, ...) so sibling generations in one request are
+        distinguishable in the UI instead of seven spans all called "generation".
+        """
+        with self._tracer.stage(
+            stage or "llm.call",
+            kind="generation",
+            metadata={"role": role, "requested_model": model},
+        ):
+            yield
 
     async def _call_with_retries(
         self,
@@ -181,6 +201,7 @@ class LLMClient:
         make_call: Callable[[str], Awaitable[RawResult]],
         started: float,
         model: str | None = None,
+        prompt_version: str | None = None,
     ) -> tuple[RawResult, int, bool]:
         """Walk the model chain. Within each model, retry transient failures; on exhaustion,
         move to the next model. Returns (result, attempts, used_fallback)."""
@@ -221,6 +242,7 @@ class LLMClient:
                         attempts=attempts,
                         used_fallback=model_index > 0,
                         error=f"{type(exc).__name__}: {exc}",
+                        prompt_version=prompt_version,
                     )
                     raise
                 else:
@@ -237,6 +259,7 @@ class LLMClient:
             attempts=attempts,
             used_fallback=len(chain) > 1,
             error=f"{type(last_error).__name__}: {last_error}" if last_error else "exhausted",
+            prompt_version=prompt_version,
         )
         msg = f"all models failed after {attempts} attempt(s): {chain}"
         raise LLMError(msg) from last_error
@@ -251,8 +274,15 @@ class LLMClient:
         model: str | None = None,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         temperature: float | None = None,
+        stage: str | None = None,
+        prompt_version: str | None = None,
     ) -> LLMResponse:
-        """One non-streaming call."""
+        """One non-streaming call.
+
+        `stage` names the span (ARCHITECTURE §10) and `prompt_version` records which prompt
+        file produced it (ADR-006). Both are optional so a call can be made without them,
+        and both are passed by every caller in Sutra so no generation is anonymous.
+        """
         started = time.perf_counter()
 
         async def call(resolved: str) -> RawResult:
@@ -264,18 +294,24 @@ class LLMClient:
                 timeout=self._settings.llm_timeout_seconds,
             )
 
-        raw, attempts, used_fallback = await self._call_with_retries(
-            role=role, make_call=call, started=started, model=model
-        )
-        usage = self._price(raw)
-        latency_ms = self._trace(
-            model=raw.model,
-            role=role,
-            usage=usage,
-            started=started,
-            attempts=attempts,
-            used_fallback=used_fallback,
-        )
+        with self._generation_span(stage=stage, role=role, model=model):
+            raw, attempts, used_fallback = await self._call_with_retries(
+                role=role,
+                make_call=call,
+                started=started,
+                model=model,
+                prompt_version=prompt_version,
+            )
+            usage = self._price(raw)
+            latency_ms = self._trace(
+                model=raw.model,
+                role=role,
+                usage=usage,
+                started=started,
+                attempts=attempts,
+                used_fallback=used_fallback,
+                prompt_version=prompt_version,
+            )
         return LLMResponse(
             text=raw.text,
             model=raw.model,
@@ -295,6 +331,8 @@ class LLMClient:
         model: str | None = None,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         temperature: float | None = None,
+        stage: str | None = None,
+        prompt_version: str | None = None,
     ) -> LLMResponse:
         """One call constrained to `schema`. The validated instance is on `.parsed`."""
         started = time.perf_counter()
@@ -309,18 +347,24 @@ class LLMClient:
                 timeout=self._settings.llm_timeout_seconds,
             )
 
-        raw, attempts, used_fallback = await self._call_with_retries(
-            role=role, make_call=call, started=started, model=model
-        )
-        usage = self._price(raw)
-        latency_ms = self._trace(
-            model=raw.model,
-            role=role,
-            usage=usage,
-            started=started,
-            attempts=attempts,
-            used_fallback=used_fallback,
-        )
+        with self._generation_span(stage=stage, role=role, model=model):
+            raw, attempts, used_fallback = await self._call_with_retries(
+                role=role,
+                make_call=call,
+                started=started,
+                model=model,
+                prompt_version=prompt_version,
+            )
+            usage = self._price(raw)
+            latency_ms = self._trace(
+                model=raw.model,
+                role=role,
+                usage=usage,
+                started=started,
+                attempts=attempts,
+                used_fallback=used_fallback,
+                prompt_version=prompt_version,
+            )
         return LLMResponse(
             text=raw.text,
             model=raw.model,
@@ -340,40 +384,47 @@ class LLMClient:
         model: str | None = None,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         temperature: float | None = None,
+        stage: str | None = None,
+        prompt_version: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream text deltas, then one terminal event carrying usage and cost.
 
         No retries here on purpose: once the first token has been handed to the caller, a retry
-        would duplicate output. Phase 4 maps these events onto SSE frames.
+        would duplicate output. `sutra.api.streaming` maps these events onto SSE frames.
+
+        The span stays open for the whole stream, so its duration is the time the caller spent
+        receiving tokens rather than the time to the first one.
         """
         started = time.perf_counter()
         resolved = self.resolve_model(role, model)
         final: RawResult | None = None
 
-        async for delta, result in self._adapter.stream(
-            model=resolved,
-            messages=messages,
-            max_output_tokens=max_output_tokens,
-            temperature=self.effective_temperature(resolved, temperature),
-            timeout=self._settings.llm_timeout_seconds,
-        ):
-            if delta is not None:
-                yield StreamDelta(text=delta)
-            if result is not None:
-                final = result
+        with self._generation_span(stage=stage, role=role, model=model):
+            async for delta, result in self._adapter.stream(
+                model=resolved,
+                messages=messages,
+                max_output_tokens=max_output_tokens,
+                temperature=self.effective_temperature(resolved, temperature),
+                timeout=self._settings.llm_timeout_seconds,
+            ):
+                if delta is not None:
+                    yield StreamDelta(text=delta)
+                if result is not None:
+                    final = result
 
-        if final is None:
-            final = RawResult(text="", model=resolved)
-        usage = self._price(final)
-        self._trace(
-            model=final.model,
-            role=role,
-            usage=usage,
-            started=started,
-            attempts=1,
-            used_fallback=False,
-            streamed=True,
-        )
+            if final is None:
+                final = RawResult(text="", model=resolved)
+            usage = self._price(final)
+            self._trace(
+                model=final.model,
+                role=role,
+                usage=usage,
+                started=started,
+                attempts=1,
+                used_fallback=False,
+                streamed=True,
+                prompt_version=prompt_version,
+            )
         yield StreamDone(usage=usage, model=final.model, response_id=final.response_id)
 
 

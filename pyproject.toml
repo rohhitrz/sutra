@@ -22,6 +22,7 @@ dependencies = [
     "fastembed>=0.9",
     # --- YAML: prompt front-matter and eval profiles (ADR-006, ADR-008) ---
     "pyyaml>=6.0",
+    "langfuse>=5.0,<6",
 ]
 
 [project.optional-dependencies]
