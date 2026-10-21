@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class HealthComponent(BaseModel):
@@ -98,3 +98,41 @@ class ChatResponse(BaseModel):
     dropped_citations: list[int] = Field(default_factory=list)
     # Populated from Phase 4 onward.
     trace_id: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    """`POST /v1/feedback`.
+
+    At least one of `trace_id` and `message_id` must be given. A rating that points at
+    nothing is unattributable, and storing it would quietly grow a table of numbers about
+    no particular answer.
+    """
+
+    # # CONCEPT: Thumbs, not stars. A five-point scale invites the middle and produces a
+    # # distribution nobody can act on; ±1 with an optional comment is the signal that
+    # # actually arrives in production, and it is what the `feedback` table's check
+    # # constraint enforces.
+    rating: Literal[-1, 1]
+    trace_id: str | None = Field(default=None, max_length=128)
+    message_id: uuid.UUID | None = None
+    comment: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def _must_identify_an_answer(self) -> FeedbackRequest:
+        if self.trace_id is None and self.message_id is None:
+            msg = "give at least one of trace_id or message_id"
+            raise ValueError(msg)
+        return self
+
+
+class FeedbackResponse(BaseModel):
+    """What was recorded, and whether the trace was scored."""
+
+    id: uuid.UUID
+    trace_id: str | None = None
+    message_id: uuid.UUID | None = None
+    rating: int
+    # False when tracing is off or Langfuse could not be reached. The row is still stored —
+    # the database is the record of truth for feedback and Langfuse is a view onto it, so a
+    # tracing outage must not lose a user's rating.
+    scored: bool

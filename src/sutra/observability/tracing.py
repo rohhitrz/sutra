@@ -84,7 +84,14 @@ class SutraTracer(Protocol):
         name: str,
         value: float | str,
         comment: str | None = None,
-    ) -> None: ...
+    ) -> bool:
+        """Attach a score to a trace. Returns whether it actually reached a backend.
+
+        A bool rather than None because the caller has something to tell the user: feedback
+        is stored in Postgres first and scored second, so "recorded but not scored" is a
+        real and reportable state rather than a failure.
+        """
+        ...
 
     def trace_url(self, trace_id: str) -> str | None: ...
 
@@ -156,8 +163,9 @@ class NoOpTracer:
 
     def score(
         self, *, trace_id: str, name: str, value: float | str, comment: str | None = None
-    ) -> None:
+    ) -> bool:
         logger.debug("trace.score trace=%s %s=%s", trace_id, name, value)
+        return False
 
     def trace_url(self, trace_id: str) -> str | None:
         return None
@@ -310,7 +318,7 @@ class LangfuseTracer:
 
     def score(
         self, *, trace_id: str, name: str, value: float | str, comment: str | None = None
-    ) -> None:
+    ) -> bool:
         try:
             self._client.create_score(trace_id=trace_id, name=name, value=value, comment=comment)
             # Feedback arrives on its own request, with nothing after it to trigger a flush,
@@ -318,6 +326,8 @@ class LangfuseTracer:
             self._client.flush()
         except Exception:
             logger.warning("tracing.score_failed name=%s", name, exc_info=True)
+            return False
+        return True
 
     def trace_url(self, trace_id: str) -> str | None:
         try:
