@@ -72,6 +72,9 @@ class Profile(BaseModel):
     retrieval_mode: Literal["vector", "keyword", "hybrid"] = "vector"
     candidate_k: int = 20
     rrf_k: int = 60
+    # Cross-encoder reranking over the retrieved pool (step 4).
+    rerank_enabled: bool = False
+    rerank_candidates: int = 20
     prompt_version_answer: str = "v1"
     judges: list[JudgeName] = Field(default_factory=lambda: list(JUDGE_NAMES))
     concurrency: int = 4
@@ -97,6 +100,8 @@ class Profile(BaseModel):
                 "retrieval_mode": self.retrieval_mode,
                 "retrieval_candidate_k": self.candidate_k,
                 "rrf_k": self.rrf_k,
+                "rerank_enabled": self.rerank_enabled,
+                "rerank_candidates": self.rerank_candidates,
                 "prompt_version_answer": self.prompt_version_answer,
             }
         )

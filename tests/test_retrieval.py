@@ -517,3 +517,59 @@ async def test_search_dispatches_on_the_configured_mode(stub_index: Settings):
                 "Halvern Reach", session=session, k=3, settings=configured, embedder=StubEmbedder()
             )
             assert len(hits) <= 3, mode
+
+
+async def test_search_widens_the_pool_when_reranking(stub_index: Settings):
+    """A reranker can only reorder what it is handed, so `search` must fetch
+    `rerank_candidates` rather than k. Retrieving five and reranking five is a no-op dressed
+    as a technique."""
+    seen: list[int] = []
+
+    class CountingReranker:
+        def scores(self, query: str, passages: Sequence[str]) -> list[float]:
+            seen.append(len(passages))
+            return [float(-i) for i in range(len(passages))]
+
+    configured = stub_index.model_copy(
+        update={
+            "index_version": TEST_SLOT,
+            "retrieval_mode": "vector",
+            "rerank_enabled": True,
+            "rerank_candidates": 12,
+        }
+    )
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await search(
+            "where does the Line end?",
+            session=session,
+            k=3,
+            settings=configured,
+            embedder=StubEmbedder(),
+            reranker=CountingReranker(),
+        )
+
+    assert seen and seen[0] > 3, "the reranker was handed only the final k"
+    assert len(hits) == 3
+    assert [c.rank for c in hits] == [1, 2, 3]
+
+
+async def test_search_skips_the_reranker_when_disabled(stub_index: Settings):
+    """Off by default, and genuinely off — not loaded, not called."""
+
+    class ExplodingReranker:
+        def scores(self, query: str, passages: Sequence[str]) -> list[float]:
+            raise AssertionError("the reranker must not be called when disabled")
+
+    configured = stub_index.model_copy(update={"index_version": TEST_SLOT, "rerank_enabled": False})
+    factory = get_sessionmaker()
+    async with factory() as session:
+        hits = await search(
+            "where does the Line end?",
+            session=session,
+            k=3,
+            settings=configured,
+            embedder=StubEmbedder(),
+            reranker=ExplodingReranker(),
+        )
+    assert len(hits) == 3

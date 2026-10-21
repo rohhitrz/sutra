@@ -201,6 +201,16 @@ class Settings(BaseSettings):
     # lower trusts an individual retriever's top rank more.
     rrf_k: int = 60
 
+    # ---- Cross-encoder reranking (Phase 3 step 4) ----
+    # # CONCEPT: A bi-encoder embeds the chunk before it has seen the query, so retrieval is
+    # # a comparison of two summaries. A cross-encoder reads query and passage together and
+    # # is far more accurate — and unusable as a retriever, at one forward pass per chunk per
+    # # query. So retrieve widely and cheaply, then spend the expensive model on a shortlist.
+    rerank_enabled: bool = False
+    # The shortlist handed to the cross-encoder. A reranker can only reorder what it is given,
+    # so this, not `retrieval_top_k`, is what bounds how much it can discover.
+    rerank_candidates: int = 20
+
     # ---- Contextual retrieval (Phase 3 step 2) ----
     # # CONCEPT: A fast model writes 1-2 sentences situating each chunk in its document,
     # # prepended before embedding so a chunk carries the subject its own sentences omit.

@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
@@ -57,6 +57,11 @@ class RetrievedChunk(BaseModel):
     chunk_no: int
     heading: str | None
     text: str
+    # The generated prefix this chunk was *indexed* with (step 2), or None. Carried because
+    # the reranker has to see what retrieval saw: scoring the bare text would hand the
+    # cross-encoder the un-contextualised chunk, which is the handicap step 2 removed from
+    # the embedder.
+    context_prefix: str | None = None
     token_count: int | None
     # Cosine *similarity* in [-1, 1], not the distance Postgres returns. Higher is nearer.
     score: float
@@ -70,6 +75,7 @@ def _searchable_columns() -> list[Any]:
         ChunkRow.parent_id,
         ChunkRow.chunk_no,
         ChunkRow.text,
+        ChunkRow.context_prefix,
         ChunkRow.token_count,
         ChunkRow.meta,
         DocumentRow.slug,
@@ -90,6 +96,7 @@ def _to_chunk(row: Any, *, score: float, rank: int) -> RetrievedChunk:
         chunk_no=row.chunk_no,
         heading=row.meta.get("heading"),
         text=row.text,
+        context_prefix=row.context_prefix,
         token_count=row.token_count,
         score=score,
         rank=rank,
@@ -223,6 +230,7 @@ async def vector_search(
             ChunkRow.parent_id,
             ChunkRow.chunk_no,
             ChunkRow.text,
+            ChunkRow.context_prefix,
             ChunkRow.token_count,
             ChunkRow.meta,
             DocumentRow.slug,
@@ -257,6 +265,7 @@ async def vector_search(
             chunk_no=row.chunk_no,
             heading=row.meta.get("heading"),
             text=row.text,
+            context_prefix=row.context_prefix,
             token_count=row.token_count,
             score=1.0 - float(row.distance),
             rank=rank,
@@ -317,13 +326,55 @@ async def search(
     index_version: int | None = None,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    reranker: object | None = None,
 ) -> list[RetrievedChunk]:
-    """The configured retriever. One entry point, so callers do not branch on mode.
+    """The configured retrieval pipeline: retrieve, optionally rerank, return the top k.
 
-    `retrieval_mode` exists so `make eval` can ablate the halves against the whole: the only
-    way to say what fusion bought is to have measured each side alone under the same k, on
-    the same index, with the same everything else.
+    One entry point, so callers do not branch on mode. `retrieval_mode` and `rerank_enabled`
+    exist so `make eval` can ablate each stage: the only way to say what a technique bought is
+    to have measured without it, under the same k, on the same index, with everything else
+    held still.
+
+    When reranking is on, retrieval fetches `rerank_candidates` rather than `k`. A reranker can
+    only reorder what it is given, so its ceiling is the recall of that pool — handing it five
+    results would let it sort five and discover nothing.
     """
+    settings = settings or get_settings()
+    top_k = k if k is not None else settings.retrieval_top_k
+    pool = max(settings.rerank_candidates, top_k) if settings.rerank_enabled else top_k
+
+    hits = await _retrieve(
+        query,
+        session=session,
+        k=pool,
+        index_version=index_version,
+        settings=settings,
+        embedder=embedder,
+    )
+    if not settings.rerank_enabled:
+        return hits
+
+    from sutra.retrieval.rerank import Reranker, rerank
+
+    return await rerank(
+        query,
+        hits,
+        top_k=top_k,
+        reranker=cast("Reranker | None", reranker),
+        settings=settings,
+    )
+
+
+async def _retrieve(
+    query: str,
+    *,
+    session: AsyncSession,
+    k: int | None = None,
+    index_version: int | None = None,
+    settings: Settings | None = None,
+    embedder: Embedder | None = None,
+) -> list[RetrievedChunk]:
+    """Dispatch to the configured retriever, before any reranking."""
     settings = settings or get_settings()
     mode = settings.retrieval_mode
     if mode == "keyword":

@@ -1,0 +1,31 @@
+# Phase 3 step 4 — cross-encoder reranking on top of the hybrid retriever.
+#
+# Identical to hybrid.yaml except that the fused top-20 goes through
+# `BAAI/bge-reranker-base` and only the best 5 survive. The delta is the reranker and nothing
+# else.
+#
+# Why the pool is 20 and not 5: a reranker can only reorder what it is handed, so its ceiling
+# is the recall of that pool. Handing it the final five would let it sort five and discover
+# nothing. Step 3 had to come first for the same reason — the better the pool, the more there
+# is for the cross-encoder to find.
+#
+# Expect this to cost latency. Twenty query-and-passage forward passes on CPU is the most
+# expensive thing in the pipeline so far, and it runs per query rather than per ingest.
+name: hybrid_rerank
+description: Vector + FTS fused by RRF, reranked by bge-reranker-base, parent expansion, answer.v1.
+
+# Retrieval
+top_k: 5
+index_version: 3
+expand_to_parent: true
+retrieval_mode: hybrid
+candidate_k: 20
+rrf_k: 60
+rerank_enabled: true
+rerank_candidates: 20
+
+# Generation
+prompt_version_answer: v1
+
+judges: [faithfulness, relevance, correctness]
+concurrency: 4
