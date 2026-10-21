@@ -703,6 +703,41 @@ Against the live stack, not by inspection:
     but it means a caller that builds an `LLMClient` before `set_tracer` gets the no-op. The
     client defaulting to `get_tracer()` makes that the only remaining way to lose generations.
 
+19. **`advanced.yaml` runs query rewriting, which Phase 3 measured as contributing nothing —
+    and this file said it was off.** `query_rewrite_enabled: true` *is* multi-query (it is the
+    flag that drives `multi_query_count`); only `router_enabled` is off. Measured over the
+    42-row `advanced-20261021-164336` run by counting `hybrid_search` spans per row:
+
+    | extra queries the rewrite produced | rows |
+    |---|---|
+    | **none** — only the question and the HyDE passage | **33 of 42 (79%)** |
+    | one | 1 |
+    | two | 8 |
+
+    Cost for that: **42 LLM calls, $0.003, 112s of model time per run.** Step 5a measured the
+    same stage alone as byte-identical to step 4 and dropped it.
+
+    **But its contribution *alongside* HyDE has never been measured.** Step 5a was rewrite
+    without HyDE; step 5b was rewrite plus HyDE; there is no HyDE-only profile. So this is an
+    unmeasured cost, not a proven waste — and one eval run settles it. See the next step.
+
+20. **No generation span records its prompt or its completion.** All six — `rewrite`, `hyde`,
+    `answer`, `judge_faithfulness`, `judge_relevance`, `judge_correctness` — have empty
+    `input` and `output` (verified in `events_full`). Model, tokens, cost, latency and prompt
+    version are all there, which satisfies ARCHITECTURE §10's list, but the thing you actually
+    open a trace for — what was sent and what came back — is absent. `TRACING_CAPTURE_CONTENT`
+    exists for exactly this and is not yet wired to it.
+
+    The cost of this gap is concrete: HyDE fabricated a detailed false passage on row
+    `02253c9d348515304c5076cfcfe165db` ("population of 3,280… 740 residents… Ford magistrates…
+    spring of 1145" — none of those strings occur anywhere in the corpus), and that was only
+    visible because the *next* stage happened to record its input. On its own span, HyDE's
+    output is blank.
+
+    Smaller holes in the same family: `fusion` has no input; `multi_query_fusion` reports only
+    `fused`, without the `from_both`/`dense_only`/`lexical_only` breakdown that `fusion` has;
+    `embed_query`, `expand_to_parents` and `eval.row` have no output.
+
 18. **The `meta` SSE frame departs from ARCHITECTURE §5 in two documented ways.** §5 describes
     it as "trace_id, cost, cache_hit". Cost is on `done` instead, because `meta` is sent before
     the answer call and the cost is not known until the provider finishes — a field that is
@@ -720,9 +755,25 @@ Against the live stack, not by inspection:
 
 ## Next step
 
-**Phase 4 is done.** Tracing, streaming and feedback are built, and the Langfuse stack is
-proven rather than assumed. Start **Phase 5 — Generation, context management, memory** with
-the opening prompt in `docs/BUILD_PLAN.md`. Carry these in:
+**Phase 4 is done**, and reading its traces in the UI immediately found two things that are
+worth doing *before* Phase 5 — both are small and one of them makes the pipeline cheaper:
+
+**A. Settle whether query rewriting earns its place (known issue 19).** One eval run:
+`advanced` with `query_rewrite_enabled: false`, everything else identical. It is the ablation
+Phase 3 never ran — step 5a tested rewrite without HyDE, step 5b tested rewrite *with* HyDE,
+and nothing isolated HyDE alone. Today the stage adds no query at all in 79% of rows and costs
+42 LLM calls per run. If the run comes back neutral, turn it off: free latency and cost.
+Remember the metrics are now stochastic (known issue 3), so read it against a repeat of
+`advanced` rather than against the single recorded row.
+
+**B. Record generation input and output (known issue 20).** All six generation spans are blank
+on both sides, so no trace can show the prompt that was actually sent. Gate it on
+`TRACING_CAPTURE_CONTENT`, which exists for this. Fill the small holes in the same pass:
+`fusion` input, the `multi_query_fusion` breakdown, and outputs on `embed_query`,
+`expand_to_parents` and `eval.row`.
+
+Then start **Phase 5 — Generation, context management, memory** with the opening prompt in
+`docs/BUILD_PLAN.md`. Carry these in:
 
 - **The traces answer Phase 3's open latency question, and the answer is not retrieval.** On an
   `advanced` turn, `retrieve` spends ~10.8s of which `route` is 3.8s, the query transforms 4.3s
@@ -751,7 +802,9 @@ the opening prompt in `docs/BUILD_PLAN.md`. Carry these in:
 Leftovers:
 
 - `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known issue 13).
-- `multi_query` and `router_enabled` remain implemented, off, and documented as losing here.
+- `router_enabled` remains implemented, off, and documented as losing here. **The companion
+  claim about `multi_query` was wrong and is corrected in known issue 19** — it is *on* in
+  `advanced.yaml`.
 - The `--limit` report-overwrite guard is one-sided (known issue 14).
 
 ## Session log
