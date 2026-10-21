@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Sequence
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -66,6 +67,19 @@ class RetrievedChunk(BaseModel):
     # Cosine *similarity* in [-1, 1], not the distance Postgres returns. Higher is nearer.
     score: float
     rank: int
+
+
+def _doc_type_clause(doc_types: Sequence[str]) -> tuple[Any, ...]:
+    """A metadata filter, or nothing at all.
+
+    Returns a tuple so an empty filter contributes no WHERE clause rather than a tautology —
+    `general` is the common route and must cost nothing. The filter reads `doc_type` from the
+    joined `documents` row, not from chunk metadata, for the same reason the slug does: the
+    metadata copy is a denormalised convenience and the join is the source of truth.
+    """
+    if not doc_types:
+        return ()
+    return (DocumentRow.doc_type.in_(tuple(doc_types)),)
 
 
 def _searchable_columns() -> list[Any]:
@@ -136,6 +150,7 @@ async def keyword_search(
     k: int | None = None,
     index_version: int | None = None,
     settings: Settings | None = None,
+    doc_types: Sequence[str] = (),
 ) -> list[RetrievedChunk]:
     """Rank chunks by Postgres full-text search over the `tsv` column.
 
@@ -172,6 +187,7 @@ async def keyword_search(
         # candidate sets.
         .where(ChunkRow.embedding.is_not(None))
         .where(ChunkRow.tsv.op("@@")(tsquery))
+        .where(*_doc_type_clause(doc_types))
         .order_by(rank_score.desc())
         .limit(top_k)
     )
@@ -191,6 +207,7 @@ async def vector_search(
     index_version: int | None = None,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    doc_types: Sequence[str] = (),
 ) -> list[RetrievedChunk]:
     """Embed `query` and return its k nearest chunks from one index slot.
 
@@ -245,6 +262,7 @@ async def vector_search(
         # embedder's 512-token limit. Without this filter they come back with a NULL distance
         # and, on a small corpus, pad out the top k with rows that were never searchable.
         .where(ChunkRow.embedding.is_not(None))
+        .where(*_doc_type_clause(doc_types))
         .order_by(distance)
         .limit(top_k)
     )
@@ -282,6 +300,7 @@ async def hybrid_search(
     index_version: int | None = None,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    doc_types: Sequence[str] = (),
 ) -> list[RetrievedChunk]:
     """Run both retrievers over a wider candidate pool, then fuse by reciprocal rank.
 
@@ -308,9 +327,15 @@ async def hybrid_search(
         index_version=index_version,
         settings=settings,
         embedder=embedder,
+        doc_types=doc_types,
     )
     lexical = await keyword_search(
-        query, session=session, k=candidates, index_version=index_version, settings=settings
+        query,
+        session=session,
+        k=candidates,
+        index_version=index_version,
+        settings=settings,
+        doc_types=doc_types,
     )
     logger.debug(
         "hybrid: %d dense, %d lexical candidates -> top %d", len(dense), len(lexical), top_k
@@ -348,7 +373,10 @@ async def search(
     # # places. Issuing one query per fact and fusing the results is the obvious fix, and
     # # nothing cheaper works — which is why this is the stage aimed at multi-hop.
     from sutra.retrieval.query_transform import gather_queries
+    from sutra.retrieval.router import route
 
+    decision = await route(query, settings=settings)
+    doc_types = decision.doc_types
     queries = await gather_queries(query, settings=settings)
     if len(queries) == 1:
         hits = await _retrieve(
@@ -358,6 +386,7 @@ async def search(
             index_version=index_version,
             settings=settings,
             embedder=embedder,
+            doc_types=doc_types,
         )
     else:
         from sutra.retrieval.fusion import reciprocal_rank_fusion
@@ -373,6 +402,7 @@ async def search(
                 index_version=index_version,
                 settings=settings,
                 embedder=embedder,
+                doc_types=doc_types,
             )
             for q in queries
         ]
@@ -400,13 +430,19 @@ async def _retrieve(
     index_version: int | None = None,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    doc_types: Sequence[str] = (),
 ) -> list[RetrievedChunk]:
     """Dispatch to the configured retriever, before any reranking."""
     settings = settings or get_settings()
     mode = settings.retrieval_mode
     if mode == "keyword":
         return await keyword_search(
-            query, session=session, k=k, index_version=index_version, settings=settings
+            query,
+            session=session,
+            k=k,
+            index_version=index_version,
+            settings=settings,
+            doc_types=doc_types,
         )
     if mode == "hybrid":
         return await hybrid_search(
@@ -416,6 +452,7 @@ async def _retrieve(
             index_version=index_version,
             settings=settings,
             embedder=embedder,
+            doc_types=doc_types,
         )
     return await vector_search(
         query,
@@ -424,4 +461,5 @@ async def _retrieve(
         index_version=index_version,
         settings=settings,
         embedder=embedder,
+        doc_types=doc_types,
     )

@@ -79,6 +79,8 @@ class Profile(BaseModel):
     query_rewrite_enabled: bool = False
     multi_query_count: int = 3
     hyde_enabled: bool = False
+    # Query routing and metadata filters (step 6).
+    router_enabled: bool = False
     prompt_version_answer: str = "v1"
     judges: list[JudgeName] = Field(default_factory=lambda: list(JUDGE_NAMES))
     concurrency: int = 4
@@ -109,6 +111,7 @@ class Profile(BaseModel):
                 "query_rewrite_enabled": self.query_rewrite_enabled,
                 "multi_query_count": self.multi_query_count,
                 "hyde_enabled": self.hyde_enabled,
+                "router_enabled": self.router_enabled,
                 "prompt_version_answer": self.prompt_version_answer,
             }
         )

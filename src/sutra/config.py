@@ -145,6 +145,7 @@ class Settings(BaseSettings):
     prompt_version_context_prefix: str = "v1"
     prompt_version_query_transform: str = "v1"
     prompt_version_hyde: str = "v1"
+    prompt_version_router: str = "v1"
 
     # ---- Retrieval / ingestion ----
     # # CONCEPT: Index versioning — re-ingesting under a new version lets old chunks keep serving
@@ -226,6 +227,13 @@ class Settings(BaseSettings):
     # HyDE: embed a hypothetical answer instead of only the question. The draft is never
     # shown and never indexed — see `retrieval/query_transform.py`.
     hyde_enabled: bool = False
+
+    # ---- Routing and metadata filters (Phase 3 step 6) ----
+    # # CONCEPT: Narrow the search space before searching it. The asymmetry is what matters:
+    # # a correct narrow route saves a few slots, a wrong one hides the answer with no second
+    # # pass to recover it. So rules fire only on unambiguous wording and the classifier is
+    # # told to prefer "general", which applies no filter at all.
+    router_enabled: bool = False
 
     # ---- Contextual retrieval (Phase 3 step 2) ----
     # # CONCEPT: A fast model writes 1-2 sentences situating each chunk in its document,
