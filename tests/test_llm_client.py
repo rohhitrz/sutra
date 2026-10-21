@@ -353,6 +353,67 @@ async def test_tracer_records_failures(settings: Settings):
     assert tracer.records[0].error is not None
 
 
+async def test_a_record_carries_the_prompt_and_the_completion(settings: Settings):
+    """Known issue 20: the span had model, tokens and cost but neither side of the call."""
+    tracer = RecordingTracer()
+    client = LLMClient(settings=settings, adapter=FakeAdapter(), tracer=tracer)
+    await client.complete(PROMPT)
+
+    record = tracer.records[0]
+    # Plain dicts, not Pydantic models: the shape Langfuse renders as a chat log.
+    assert record.input == [{"role": "user", "content": "Who is the Archivist?"}]
+    assert record.output == "The Archivist keeps the Meridian records."
+
+
+async def test_a_structured_record_carries_the_raw_json_not_the_parsed_object(
+    settings: Settings,
+):
+    """The provider's own document. For a truncated response it is the only evidence left."""
+    tracer = RecordingTracer()
+    client = LLMClient(settings=settings, adapter=FakeAdapter(), tracer=tracer)
+    await client.structured(PROMPT, AnswerSchema)
+
+    assert tracer.records[0].output == "The Archivist keeps the Meridian records."
+
+
+async def test_a_streamed_record_carries_the_accumulated_text(settings: Settings):
+    tracer = RecordingTracer()
+    client = LLMClient(settings=settings, adapter=FakeAdapter(), tracer=tracer)
+    async for _ in client.stream(PROMPT):
+        pass
+
+    record = tracer.records[0]
+    assert record.streamed is True
+    assert record.input == [{"role": "user", "content": "Who is the Archivist?"}]
+    assert record.output == "The Archivist keeps the Meridian records."
+
+
+async def test_a_failed_call_still_records_the_prompt_it_sent(settings: Settings):
+    """The prompt is the whole reason to open a failed generation — a 400 is about the input."""
+    tracer = RecordingTracer()
+    settings = settings.model_copy(update={"llm_fallback_models": []})
+    adapter = FakeAdapter(always_fail={"gpt-6-luna"})
+    client = LLMClient(settings=settings, adapter=adapter, tracer=tracer)
+
+    with pytest.raises(LLMError):
+        await client.complete(PROMPT)
+
+    record = tracer.records[0]
+    assert record.input == [{"role": "user", "content": "Who is the Archivist?"}]
+    assert record.output is None
+
+
+async def test_a_non_retryable_failure_also_records_its_prompt(settings: Settings):
+    tracer = RecordingTracer()
+    adapter = FakeAdapter(raise_non_retryable=True)
+    client = LLMClient(settings=settings, adapter=adapter, tracer=tracer)
+
+    with pytest.raises(BadRequestError):
+        await client.complete(PROMPT)
+
+    assert tracer.records[0].input == [{"role": "user", "content": "Who is the Archivist?"}]
+
+
 # ---------------------------------------------------------------------------
 # model capabilities
 # ---------------------------------------------------------------------------

@@ -122,6 +122,32 @@ class _NullStage:
         return None
 
 
+class _GatedStage:
+    """A span whose `output` obeys `TRACING_CAPTURE_CONTENT`, like its `input` already does.
+
+    # CONCEPT: A privacy switch is only worth the name if it covers every way content can
+    # leave. A span's input is known when the span opens, so it is gated there; its output
+    # arrives later, through `update` at the call site. Gating it there too would mean
+    # repeating the check at every call site and losing the flag the first time someone adds
+    # a span — so the gate lives on the object the call site is handed.
+
+    `update` forwards exactly the keywords it was given, minus `output` when capture is off,
+    so a span is never handed an explicit `output=None` that would overwrite something.
+    """
+
+    def __init__(self, span: Any, *, capture_content: bool) -> None:
+        self._span = span
+        self._capture_content = capture_content
+
+    def update(self, **kwargs: Any) -> None:
+        if not self._capture_content:
+            kwargs.pop("output", None)
+        self._span.update(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._span, name)
+
+
 class NoOpTracer:
     """The implementation used when tracing is off or unconfigured.
 
@@ -240,7 +266,7 @@ class LangfuseTracer:
                     name=name, as_type="span", input=self._payload(input), metadata=metadata
                 ) as span:
                     with bind_trace_id(self._client.get_current_trace_id()):
-                        yield span
+                        yield _GatedStage(span, capture_content=self._capture_content)
         except Exception:
             # The request itself must survive a broken tracer. Note this catches failures in
             # *tracing*; an exception from the wrapped body propagates through the inner
@@ -267,7 +293,7 @@ class LangfuseTracer:
             yield _NullStage()
             return
         with cm as span:
-            yield span
+            yield _GatedStage(span, capture_content=self._capture_content)
 
     def event(
         self,
@@ -314,6 +340,11 @@ class LangfuseTracer:
 
             self._client.update_current_generation(
                 model=record.model,
+                # The prompt and the completion. `LLMClient` opened this span before the call
+                # and we are inside it, so these land on the generation itself rather than on
+                # the stage span wrapped around it — which is where a reader looks for them.
+                input=self._payload(record.input),
+                output=self._payload(record.output),
                 usage_details=usage,
                 # `cost_details` is our own priced number from the config table, not
                 # Langfuse's model-matching guess. Ours is the one the evals quote, so it is

@@ -242,8 +242,12 @@ async def vector_search(
     # The embedding gets its own span: it is CPU-bound ONNX inference on a thread, and it is
     # the first thing to suspect when a vector search is slow for reasons the database cannot
     # explain.
-    with stage("embed_query", kind="span", input={"query": query}):
+    with stage("embed_query", kind="span", input={"query": query}) as embed_span:
         query_vector = await asyncio.to_thread(embedder.embed_query, query)
+        # Dimensions, not the vector. The number that matters is whether it is the 384 the
+        # index was built with (ADR-020): a mismatch is a silent recall collapse, and 384
+        # floats in a trace are unreadable noise that would bury the rest of the span.
+        embed_span.update(output={"dims": len(query_vector)})
 
     # # CONCEPT: The distance operator has to match the one the index was built with
     # # (`vector_cosine_ops`, ADR-004). Mismatch them and Postgres silently declines the index
@@ -366,7 +370,14 @@ async def hybrid_search(
         logger.debug(
             "hybrid: %d dense, %d lexical candidates -> top %d", len(dense), len(lexical), top_k
         )
-        with stage("fusion", kind="span", metadata={"rrf_k": settings.rrf_k}) as fusion_span:
+        with stage(
+            "fusion",
+            kind="span",
+            # What went in, so the output's breakdown reads as a ratio rather than a count.
+            # A `lexical: 0` here is the answer to "why did fusion change nothing".
+            input={"dense": len(dense), "lexical": len(lexical), "limit": top_k},
+            metadata={"rrf_k": settings.rrf_k},
+        ) as fusion_span:
             fused = reciprocal_rank_fusion([dense, lexical], k=settings.rrf_k, limit=top_k)
             # Which half each surviving result came from is the number that says whether the
             # keyword side is earning its place on this query, rather than on average.
@@ -510,9 +521,31 @@ async def _search_inner(
             for q in queries
         ]
         logger.debug("multi-query: %d queries -> pool of %d", len(queries), pool)
-        with stage("multi_query_fusion", kind="span", metadata={"queries": len(queries)}) as span:
+        with stage(
+            "multi_query_fusion",
+            kind="span",
+            input={"queries": queries, "per_query_hits": [len(p) for p in per_query]},
+            metadata={"queries": len(queries), "rrf_k": settings.rrf_k},
+        ) as span:
             hits = reciprocal_rank_fusion(per_query, k=settings.rrf_k, limit=pool)
-            span.update(output={"fused": len(hits)})
+            # The same question `fusion` answers for its two halves, asked of n queries:
+            # which of them actually contributed to the pool that survived. `unique_to_one`
+            # is the number that says whether the extra queries found anything the original
+            # did not — the measurement known issue 19 is about, per request rather than per
+            # run. `contributed` counts queries with at least one survivor, so a rewrite that
+            # retrieved nothing useful is visible as a query that paid for nothing.
+            per_query_ids = [{c.chunk_id for c in ranked} for ranked in per_query]
+            appearances = [sum(1 for ids in per_query_ids if c.chunk_id in ids) for c in hits]
+            span.update(
+                output={
+                    "fused": len(hits),
+                    "unique_to_one": sum(1 for n in appearances if n == 1),
+                    "from_several": sum(1 for n in appearances if n > 1),
+                    "contributed": sum(
+                        1 for ids in per_query_ids if any(c.chunk_id in ids for c in hits)
+                    ),
+                }
+            )
 
     tracer.event(
         "retrieval.candidates",

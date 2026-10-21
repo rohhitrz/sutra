@@ -111,3 +111,10 @@ class GenerationRecord(BaseModel):
     prompt_version: str | None = None
     error: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # What was sent and what came back. Everything else here describes the call; these two are
+    # the call. A trace without them can say a generation cost $0.0004 and took 1.2s but not
+    # what it was asked or what it answered, which is the question you opened the trace with.
+    # Both are gated by `TRACING_CAPTURE_CONTENT` in the tracer, not here: the record is the
+    # full truth about a call and the backend decides what may leave the process.
+    input: Any = None
+    output: Any = None

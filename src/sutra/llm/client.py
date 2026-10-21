@@ -13,7 +13,7 @@ import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from openai import (
     APIConnectionError,
@@ -164,6 +164,8 @@ class LLMClient:
         streamed: bool = False,
         error: str | None = None,
         prompt_version: str | None = None,
+        input: Any = None,
+        output: Any = None,
     ) -> float:
         latency_ms = (time.perf_counter() - started) * 1000
         self._tracer.on_generation(
@@ -177,9 +179,20 @@ class LLMClient:
                 streamed=streamed,
                 error=error,
                 prompt_version=prompt_version,
+                input=input,
+                output=output,
             )
         )
         return latency_ms
+
+    @staticmethod
+    def _as_prompt(messages: Sequence[Message]) -> list[dict[str, str]]:
+        """The messages as plain dicts, which is the shape Langfuse renders as a chat log.
+
+        Handing the Pydantic models straight over would serialise, but as an opaque object
+        rather than as turns the UI can show role by role.
+        """
+        return [m.model_dump() for m in messages]
 
     @contextmanager
     def _generation_span(
@@ -207,6 +220,7 @@ class LLMClient:
         started: float,
         model: str | None = None,
         prompt_version: str | None = None,
+        input: Any = None,
     ) -> tuple[RawResult, int, bool]:
         """Walk the model chain. Within each model, retry transient failures; on exhaustion,
         move to the next model. Returns (result, attempts, used_fallback)."""
@@ -248,6 +262,9 @@ class LLMClient:
                         used_fallback=model_index > 0,
                         error=f"{type(exc).__name__}: {exc}",
                         prompt_version=prompt_version,
+                        # A failed call has no output, and its prompt is the whole reason to
+                        # look at it — a 400 is almost always something about what was sent.
+                        input=input,
                     )
                     raise
                 else:
@@ -265,6 +282,7 @@ class LLMClient:
             used_fallback=len(chain) > 1,
             error=f"{type(last_error).__name__}: {last_error}" if last_error else "exhausted",
             prompt_version=prompt_version,
+            input=input,
         )
         msg = f"all models failed after {attempts} attempt(s): {chain}"
         raise LLMError(msg) from last_error
@@ -299,6 +317,7 @@ class LLMClient:
                 timeout=self._settings.llm_timeout_seconds,
             )
 
+        prompt = self._as_prompt(messages)
         with self._generation_span(stage=stage, role=role, model=model):
             raw, attempts, used_fallback = await self._call_with_retries(
                 role=role,
@@ -306,6 +325,7 @@ class LLMClient:
                 started=started,
                 model=model,
                 prompt_version=prompt_version,
+                input=prompt,
             )
             usage = self._price(raw)
             latency_ms = self._trace(
@@ -316,6 +336,8 @@ class LLMClient:
                 attempts=attempts,
                 used_fallback=used_fallback,
                 prompt_version=prompt_version,
+                input=prompt,
+                output=raw.text,
             )
         return LLMResponse(
             text=raw.text,
@@ -352,6 +374,7 @@ class LLMClient:
                 timeout=self._settings.llm_timeout_seconds,
             )
 
+        prompt = self._as_prompt(messages)
         with self._generation_span(stage=stage, role=role, model=model):
             raw, attempts, used_fallback = await self._call_with_retries(
                 role=role,
@@ -359,6 +382,7 @@ class LLMClient:
                 started=started,
                 model=model,
                 prompt_version=prompt_version,
+                input=prompt,
             )
             usage = self._price(raw)
             latency_ms = self._trace(
@@ -369,6 +393,11 @@ class LLMClient:
                 attempts=attempts,
                 used_fallback=used_fallback,
                 prompt_version=prompt_version,
+                input=prompt,
+                # The raw JSON document, not `raw.parsed`. It is what the provider actually
+                # returned, and when a structured call is truncated the difference between
+                # the two is the whole story.
+                output=raw.text,
             )
         return LLMResponse(
             text=raw.text,
@@ -435,6 +464,10 @@ class LLMClient:
                 used_fallback=False,
                 streamed=True,
                 prompt_version=prompt_version,
+                input=self._as_prompt(messages),
+                # The accumulated text, recorded once at the end rather than per delta. A
+                # span updated on every token would be 400 writes for one generation.
+                output=final.text,
             )
         yield StreamDone(
             usage=usage,

@@ -19,6 +19,7 @@ from sutra.observability.logs import JsonFormatter, TextFormatter, configure_log
 from sutra.observability.tracing import (
     LangfuseTracer,
     NoOpTracer,
+    _GatedStage,
     build_tracer,
     event,
     get_tracer,
@@ -281,6 +282,91 @@ def test_the_ambient_tracer_is_settable_and_defaults_to_the_no_op():
         assert recorded == ["cache.hit"]
     finally:
         set_tracer(original)
+
+
+# -------------------------------------------------- content capture (known issue 20)
+
+
+class _SpanSpy:
+    """Stands in for a Langfuse observation and records what `update` was handed."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def update(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
+
+
+def test_a_gated_stage_forwards_output_when_capture_is_on():
+    spy = _SpanSpy()
+    _GatedStage(spy, capture_content=True).update(output={"answer": "a"}, metadata={"n": 1})
+    assert spy.calls == [{"output": {"answer": "a"}, "metadata": {"n": 1}}]
+
+
+def test_a_gated_stage_drops_output_when_capture_is_off():
+    """Dropped, not nulled: an explicit None would overwrite whatever the span already had."""
+    spy = _SpanSpy()
+    _GatedStage(spy, capture_content=False).update(output={"answer": "a"}, metadata={"n": 1})
+    assert spy.calls == [{"metadata": {"n": 1}}]
+
+
+def test_a_gated_stage_passes_metadata_through_either_way():
+    """Metadata is structural — counts, versions, flags — and is not content to withhold."""
+    for capture in (True, False):
+        spy = _SpanSpy()
+        _GatedStage(spy, capture_content=capture).update(metadata={"rrf_k": 60})
+        assert spy.calls == [{"metadata": {"rrf_k": 60}}]
+
+
+def test_a_gated_stage_proxies_anything_else_the_sdk_offers():
+    class Rich(_SpanSpy):
+        id = "obs-1"
+
+    assert _GatedStage(Rich(), capture_content=True).id == "obs-1"
+
+
+class _GenerationSpy(LangfuseTracer):
+    """A `LangfuseTracer` with the SDK replaced, to see what `on_generation` sends."""
+
+    def __init__(self, *, capture_content: bool) -> None:
+        self.sent: dict[str, object] = {}
+        self._capture_content = capture_content
+        parent = self
+
+        class Client:
+            def update_current_generation(self, **kwargs: object) -> None:
+                parent.sent = kwargs
+
+        self._client = Client()  # type: ignore[assignment]
+
+
+def _record_with_content() -> GenerationRecord:
+    return GenerationRecord(
+        model="m",
+        usage=Usage(input_tokens=10, output_tokens=4),
+        latency_ms=5.0,
+        attempts=1,
+        used_fallback=False,
+        input=[{"role": "user", "content": "who drowned in the flood?"}],
+        output='{"answer": "Ravenna Volant."}',
+    )
+
+
+def test_a_generation_span_records_its_prompt_and_its_completion():
+    tracer = _GenerationSpy(capture_content=True)
+    tracer.on_generation(_record_with_content())
+    assert tracer.sent["input"] == [{"role": "user", "content": "who drowned in the flood?"}]
+    assert tracer.sent["output"] == '{"answer": "Ravenna Volant."}'
+
+
+def test_a_generation_span_withholds_both_when_capture_is_off():
+    """The tokens, cost and model still go: those are not content."""
+    tracer = _GenerationSpy(capture_content=False)
+    tracer.on_generation(_record_with_content())
+    assert tracer.sent["input"] is None
+    assert tracer.sent["output"] is None
+    assert tracer.sent["model"] == "m"
+    assert tracer.sent["usage_details"] == {"input": 10, "output": 4, "total": 14}
 
 
 # ------------------------------------------------------------- import ordering

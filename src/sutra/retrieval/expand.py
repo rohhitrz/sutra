@@ -61,8 +61,17 @@ async def expand_to_parents(
         .join(DocumentRow, DocumentRow.id == ChunkRow.document_id)
         .where(ChunkRow.id.in_(set(parent_ids)))
     )
-    with stage("expand_to_parents", kind="span", input={"children": len(chunks)}):
+    with stage(
+        "expand_to_parents",
+        kind="span",
+        input={"children": len(chunks), "parents_requested": len(set(parent_ids))},
+    ) as span:
         parents = {str(row.id): row for row in (await session.execute(stmt)).all()}
+        # Fetched against requested: anything less than parity is a dangling parent_id, which
+        # the warning below names but the span did not. The collapse ratio itself stays on
+        # the `retrieval.expanded` event, which is emitted after the dedupe this span
+        # deliberately does not cover.
+        span.update(output={"parents_found": len(parents)})
 
     missing = set(parent_ids) - set(parents)
     if missing:
