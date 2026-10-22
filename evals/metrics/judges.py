@@ -223,7 +223,19 @@ async def run_judge(
             response = await llm.structured(
                 messages,
                 schema,
-                role="strong",
+                # `fast`, because ARCHITECTURE §5 puts grading on the fast role. This changes
+                # nothing today — ADR-017 points both roles at one model, and ADR-017 also
+                # declined a separate judge role — so it is a statement of intent, recorded on
+                # every judge generation, rather than a change in behaviour.
+                #
+                # It is the intent worth arguing about, though, and the argument is written
+                # here rather than lost: a judge weaker than the generator it grades is a poor
+                # instrument, and known issue 2 already puts this one at roughly 9/10 against
+                # hand labels. So **if `LLM_FAST` is ever pointed at a cheaper model, the eval
+                # scoreboard's generation metrics stop being comparable across that change**,
+                # and `make judges` has to be re-run against `evals/datasets/judge_labels.jsonl`
+                # before any number measured after it is trusted.
+                role="fast",
                 max_output_tokens=MAX_JUDGE_TOKENS,
                 # Named so a row's three judges are distinguishable in the trace instead of
                 # arriving as three spans all called `llm.call`.

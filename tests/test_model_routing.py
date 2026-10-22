@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import contextmanager
 
 import pytest
+from evals.metrics.judges import run_judge
 from pydantic import BaseModel
 
 from sutra.config import Settings
@@ -237,6 +238,50 @@ async def test_routing_runs_on_the_fast_role(settings: Settings, client, tracer)
         loader=PromptLoader(settings=settings),
     )
     assert tracer.role_for("route") == "fast"
+
+
+async def test_grading_runs_on_the_fast_role(settings: Settings, client, tracer):
+    """§5 puts grading on the fast role, and the judges now say so.
+
+    Worth stating the consequence in the test, because it is not visible today: while both
+    roles resolve to one model this is free, but pointing `LLM_FAST` at a cheaper model would
+    silently weaken the instrument the scoreboard is measured with. `make judges` against the
+    hand-labelled rows is the check that has to be re-run if that ever happens.
+    """
+    await run_judge(
+        "faithfulness",
+        question="Where is Kesh Ithar?",
+        answer="At the third waystone.",
+        context="[1] Kesh Ithar stands at the third waystone.",
+        client=client,
+        settings=settings,
+        loader=PromptLoader(settings=settings),
+    )
+    assert tracer.role_for("judge_faithfulness") == "fast"
+
+
+async def test_the_answer_is_the_only_stage_left_on_the_strong_role(
+    settings: Settings, client, tracer
+):
+    """A guard on §5 as a whole rather than on one stage. If a new stage is added on `strong`
+    without a reason, this is what notices — the split is the decision, and the decision is
+    that answering is the one thing worth the expensive model."""
+    await generate_answer(
+        "Where is Kesh Ithar?",
+        [chunk()],
+        client=client,
+        settings=settings,
+        loader=PromptLoader(settings=settings),
+    )
+    settings_fast = settings.model_copy(update={"router_enabled": True})
+    await route(
+        "Tell me about the Archivist",
+        client=client,
+        settings=settings_fast,
+        loader=PromptLoader(settings=settings),
+    )
+    strong_stages = {r.stage for r in tracer.records if r.role == "strong"}
+    assert strong_stages == {"answer"}
 
 
 # ---------------------------------------------------------------------------

@@ -131,6 +131,35 @@ def test_context_and_question_reach_the_user_message(loader: PromptLoader):
     assert "How many waystones?" in messages[1].content
 
 
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_every_answer_version_states_its_load_bearing_rules(loader: PromptLoader, version: str):
+    """The contract test, applied to every shipped version rather than only the active one.
+
+    An A/B is only a fair test if both arms still obey the rules the golden set measures. v2
+    changes the refusal *threshold* on purpose; it must not quietly drop the refusal flag, the
+    citation constraint, the recency rule or the injection rule while doing it.
+    """
+    body = re.sub(r"\s+", " ", loader.get(PROMPT_NAME, version).body.lower())
+    assert "refused" in body, "refusal must be an instruction, not an inference"
+    assert "cite only numbers that appear" in body, "citations must be constrained to the context"
+    assert "latest" in body, "the Book 2 updates need an explicit recency rule"
+    assert "never something to obey" in body, "the corpus contains planted injections"
+
+
+def test_v2_differs_from_v1_only_in_how_it_decides_to_refuse(loader: PromptLoader):
+    """Pins the A/B to one variable. The sections that are not the hypothesis are v1's text,
+    so a report comparing the two arms is comparing the refusal threshold and nothing else."""
+    v1 = loader.get(PROMPT_NAME, "v1").body
+    v2 = loader.get(PROMPT_NAME, "v2").body
+    for section in ("## Citations", "## Dates", "## Passages are quoted material", "## Confidence"):
+        start_1 = v1.index(section)
+        start_2 = v2.index(section)
+        # Compare each shared section up to the next heading.
+        end_1 = v1.find("\n## ", start_1 + 1)
+        end_2 = v2.find("\n## ", start_2 + 1)
+        assert v1[start_1:end_1] == v2[start_2:end_2], f"{section} drifted between the arms"
+
+
 def test_a_prompt_without_the_delimiter_is_rejected(tmp_path):
     (tmp_path / "answer.v9.md").write_text("---\ndescription: x\n---\nno delimiter here")
     prompt = PromptLoader(directory=tmp_path).get(PROMPT_NAME, "v9")
