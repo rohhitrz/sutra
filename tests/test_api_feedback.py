@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator
 
@@ -34,14 +35,16 @@ async def _engine_per_event_loop() -> AsyncIterator[None]:
 
 
 class ScoringTracer(NoOpTracer):
-    """Records what would have been sent to Langfuse."""
+    """Records what would have been sent to Langfuse, and on which thread."""
 
     def __init__(self) -> None:
         self.scores: list[dict[str, object]] = []
+        self.threads: list[int] = []
 
     def score(
         self, *, trace_id: str, name: str, value: float | str, comment: str | None = None
     ) -> bool:
+        self.threads.append(threading.get_ident())
         self.scores.append({"trace_id": trace_id, "name": name, "value": value, "comment": comment})
         return True
 
@@ -186,6 +189,28 @@ async def test_an_unknown_message_is_a_404_rather_than_an_integrity_error(
 
 
 @pytest.mark.integration
+async def test_scoring_does_not_run_on_the_event_loop(
+    client: httpx2.AsyncClient, tracer: ScoringTracer
+):
+    """`score` is synchronous and flushes — a blocking provider round trip.
+
+    Called directly from the async handler it parks the loop, and every concurrent SSE stream
+    with it (CLAUDE.md: no blocking calls inside request handlers). It belongs on a worker
+    thread, like the ONNX embedder. Asserting the thread is the only way to see that from a
+    test; asserting the latency would be a race.
+    """
+    trace_id = uuid.uuid4().hex
+    session_id, _message_id = await _seed_message(trace_id)
+    loop_thread = threading.get_ident()
+    try:
+        response = await client.post("/v1/feedback", json={"rating": 1, "trace_id": trace_id})
+        assert response.status_code == 201
+        assert tracer.threads, "score was never called"
+        assert tracer.threads[0] != loop_thread
+    finally:
+        await _cleanup(session_id)
+
+
 async def test_a_rating_is_still_stored_when_scoring_is_unavailable(client: httpx2.AsyncClient):
     """The database is the record of truth; Langfuse is a view onto it.
 

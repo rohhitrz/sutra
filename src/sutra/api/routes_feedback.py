@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -79,7 +80,15 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
         # `score` reports whether it reached a backend. It swallows its own failures by
         # design — observability must not break a request — so this bool is how a caller
         # learns that their rating is recorded but not visible in Langfuse.
-        scored = get_tracer().score(
+        #
+        # Off the event loop, because `score` is synchronous and flushes: feedback arrives on
+        # its own request with nothing after it to trigger a send, so the tracer flushes
+        # inline, and that is a blocking provider round trip (6-9ms against a local Langfuse,
+        # unbounded against a remote one). Every concurrent SSE stream is parked for its
+        # duration. Same `to_thread` treatment the ONNX embedder gets, and for the same
+        # reason — CLAUDE.md's "no blocking calls inside request handlers".
+        scored = await asyncio.to_thread(
+            get_tracer().score,
             trace_id=trace_id,
             name="user-feedback",
             value=request.rating,
