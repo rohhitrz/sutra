@@ -5,7 +5,8 @@
 ## Current phase
 **Phase 5 — Generation, context management, memory** · Status: ⬜ not started
 (Phase 4 complete: Langfuse tracing, SSE streaming, feedback, JSON logs. The two items Phase 4
-left in front of Phase 5 — known issues 19 and 20 — are closed; see the next-step section.)
+left in front of Phase 5 — known issues 19 and 20 — are closed, as are four findings from the
+2026-10-22 review; see the next-step section.)
 
 ## Phase status
 
@@ -493,6 +494,87 @@ comparing profiles against each other, not as ground truth.
 - **ADR-019** — `make eval` is exempt from the ">200 LLM calls needs explicit OK" rule, which one
   eval run exceeds by construction.
 
+## Review fixes (2026-10-22, before Phase 5)
+
+A second external review raised four findings. **All four reproduced exactly as reported**,
+and each is fixed with a test confirmed to fail against the pre-fix code. Three of the four
+were invisible to the existing suite for structural reasons worth remembering.
+
+**1. The root span swallowed the request's exception** (`observability/tracing.py`).
+`LangfuseTracer.request` had its `yield` inside `try/except Exception`. In a
+`@contextmanager` the body's exception is thrown *into* the generator at the yield point, so
+that except caught the body's exception, not the tracer's — and yielding a second time from
+the handler makes `contextlib` raise `RuntimeError: generator didn't stop after throw()`,
+destroying the original.
+
+Reproduced end to end against the live stack: `POST /v1/chat` with another user's session id
+answered **500** with `generator didn't stop after throw()` in the log, where `routes_chat`
+has an `except SessionNotFound` that should make it a 404. After the fix, 404. This was not
+limited to that one path — *every* exception raised anywhere under a traced request was being
+converted.
+
+Two reasons it survived: the comment directly under the `except` asserted the opposite
+("an exception from the wrapped body propagates through the inner `with` and is re-raised"),
+and **`NoOpTracer.request` has a bare `yield`**, so the suite's own 404 tests passed while the
+real tracer was broken. Setup is now separated from the yield — only the three context enters
+are guarded, through `ExitStack` so one `try` can cover them without nesting the yield inside
+it. Unwinding through the stack still hands the exception to the observation's `__exit__`, so
+the span is closed and marked as before, and the degrade-to-no-op guarantee is kept and tested.
+
+**2. The feedback score blocked the event loop** (`api/routes_feedback.py`). `tracer.score()`
+is synchronous and flushes inline — the flush is deliberate (feedback arrives on its own
+request with nothing after it to trigger a send) but it is a blocking provider round trip
+inside an async handler. **Measured: 6–9ms against a local Langfuse**, unbounded against a
+remote one, and for its duration every concurrent SSE stream on the loop is parked. Now
+`asyncio.to_thread`, the same treatment `vector_search` gives the ONNX embedder and for the
+same reason — CLAUDE.md's "no blocking calls inside request handlers". The test asserts the
+*thread*, because asserting the latency would be a race.
+
+**3. A streamed response that did not complete was billed at zero** (`llm/adapters.py`). The
+stream loop matched only `response.completed`, so `response.incomplete` and `response.failed`
+fell through to the "no terminal event" fallback — a `RawResult` with zero tokens. Confirmed
+by reverting just that one line: `assert 0 == 900` on the input tokens.
+
+**This is exactly the known-issue-10 failure, priced at nothing.** `max_output_tokens` budgets
+reasoning and visible output together, so a cap sized for the answer gets eaten by reasoning
+and the response returns `incomplete` — and that is the call whose cost you most want to see.
+All three terminal events carry the same `response`, so one branch handles them. It
+deliberately does **not** raise, unlike `complete`/`structured`: tokens are already with the
+caller, which is why there are no retries on this path either, and ADR-025 lets a truncated
+stream still yield the partial answer it managed. The defect was the accounting, not the
+tolerance. `RawResult` gains `status` and `incomplete_reason`, the client logs a warning
+naming `max_output_tokens` as the remedy, and the status goes on the generation span's
+metadata — so a truncation that was invisible in the trace, the logs *and* the cost is now in
+all three. The zero-usage fallback is now only a genuinely terminated stream, reported as
+`no_terminal_event`.
+
+**4. The generation paths and the judges never got `client_scope`** (`generation/answer.py`,
+`generation/stream.py`, `evals/metrics/judges.py`). `client_scope` exists because
+`client or LLMClient(...)` leaks the provider's connection pool on every call that falls
+through to it. The router and query transforms were moved onto it in Phase 3; these three were
+missed. **Severity is lower than the reviewer's framing implies** — `/v1/chat` and the eval
+runner both inject a client, so the hot paths were never leaking. The live leak is
+`generation/demo.py`, one pool per `ask()`, plus the certainty that the next caller added
+would leak too.
+
+Three things fell out of fixing it properly:
+
+- **The no-context short circuit now builds no client at all.** It sat *below*
+  `client or LLMClient(settings)`, so the one path that makes no model call was the one
+  building a provider SDK and a pool for nothing.
+- On the streaming path the scope wraps the whole stream, not one call, since the client must
+  outlive the last token.
+- **`run_judges` opens one scope around all three judges** instead of each opening its own.
+  They fan out concurrently, so a row with no injected client was opening three pools to make
+  three calls — the same reasoning as `_search_inner`'s shared client.
+
+**A note on the tests themselves.** The finding-4 tests initially patched `LLMClient` only in
+`sutra.llm.client`. `client_scope` resolves the name there, but `answer.py` imports it
+directly — so against the *unfixed* code the patch missed and the test built a real client and
+called the OpenAI API. It failed with a 401 rather than an assertion. Both names are now
+patched: a test that fails by making a paid API call is not a test, and it would have been a
+live one with a valid key in `.env`.
+
 ## Review fixes (2026-10-20, before Phase 3 step 1)
 
 An external code review raised seven findings. All seven reproduced; one detail in the report
@@ -774,6 +856,11 @@ closed known issues 19 and 20; the rest are Phase 4's.**
     reasoning and the truncated body arrives as "Invalid JSON". `OpenAIAdapter` now detects that
     and names the real cause; `Usage.reasoning_tokens` records where the spend went.
 
+    **The streaming path used to be exempt from all of that, and billed it at zero** — fixed
+    in the 2026-10-22 review (finding 3). It still does not *raise* on a truncation, which is
+    deliberate (ADR-025), but it now reports the tokens, the `status` and the
+    `incomplete_reason` and logs the remedy.
+
 11. Two justified `ASYNC109` lint exceptions (`src/sutra/llm/adapters.py`, `tests/**`), reasons
     recorded inline in `pyproject.toml`.
 
@@ -799,6 +886,13 @@ closed known issues 19 and 20; the rest are Phase 4's.**
     and by the eval runner. Accepted deliberately over threading `tracer=` through retrieval,
     but it means a caller that builds an `LLMClient` before `set_tracer` gets the no-op. The
     client defaulting to `get_tracer()` makes that the only remaining way to lose generations.
+
+    **A second cost of this shape, learned the hard way:** `NoOpTracer` and `LangfuseTracer`
+    can diverge in behaviour and the suite will not notice, because every test runs on the
+    no-op. That is how the `request` contextmanager shipped broken for a whole phase
+    (2026-10-22 review, finding 1) — the no-op has a bare `yield` and the real one did not.
+    Any new guarantee about a tracer needs a test against `LangfuseTracer` itself, with the
+    SDK faked, not only against the no-op.
 
 19. ~~**`advanced.yaml` runs query rewriting, which Phase 3 measured as contributing nothing
     — and this file said it was off.**~~ **Closed.** Measured and dropped: `advanced.yaml` now
@@ -875,6 +969,11 @@ closed known issues 19 and 20; the rest are Phase 4's.**
 - **Generation spans record their prompts and completions**, gated by
   `TRACING_CAPTURE_CONTENT` — which now gates span outputs generally, as it did not before.
 
+A second external review then raised four findings, all of which reproduced and are fixed
+(see the 2026-10-22 review-fixes section). One was a live 500 on `/v1/chat`, so it is worth
+knowing it is closed before building on top: **any exception under a traced request was being
+converted into `RuntimeError`**, which made a foreign session id a 500 instead of a 404.
+
 **Phase 5 starts clean.** Begin **Phase 5 — Generation, context management, memory** with the
 opening prompt in `docs/BUILD_PLAN.md`. Carry these in:
 
@@ -919,6 +1018,20 @@ Leftovers:
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-22 — between 4 and 5 — four review findings, all real.**
+  The serious one was a 500: `LangfuseTracer.request` had its `yield` inside
+  `try/except Exception`, so **the body's** exception was caught and the second yield turned it
+  into `RuntimeError: generator didn't stop after throw()`. A foreign session id answered 500
+  instead of 404, reproduced live and fixed with `ExitStack`. It survived a phase because the
+  comment under the except claimed the opposite *and* `NoOpTracer.request` has a bare yield, so
+  every test passed — the lesson is in known issue 16. Also: a truncated streamed answer was
+  billed at **zero** (only `response.completed` was matched, so `incomplete`/`failed` fell
+  through to a zero-usage fallback — the known-issue-10 case, invisible in cost, logs and
+  trace); `tracer.score()` blocked the event loop for 6–9ms inside an async handler; and
+  `client_scope` had never reached the generation paths or the judges. Each fix has a test
+  confirmed to fail against the pre-fix code. One of those tests, written carelessly, made a
+  real 401'd OpenAI call before being tightened. 479 tests, lint clean.
 
 - **2026-10-21 — between 4 and 5 — known issues 19 and 20 closed.**
   Query rewriting is off: `hyde_only.yaml` against a repeat of `advanced` came back neutral on
