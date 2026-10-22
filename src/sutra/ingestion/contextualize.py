@@ -105,6 +105,11 @@ async def _one_prefix(
                 role="fast",
                 max_output_tokens=MAX_PREFIX_TOKENS,
                 temperature=prompt.meta.get("temperature"),
+                # Named like every other stage. Without this the ingest-time prefix calls
+                # arrive as spans called `llm.call` — one per chunk — which is the one place
+                # in the pipeline where that is also the highest-volume generation.
+                stage="context_prefix",
+                prompt_version=prompt.qualified_version,
             )
         except Exception as exc:
             # One failed prefix is not a failed ingest. The chunk is indexed bare, exactly as

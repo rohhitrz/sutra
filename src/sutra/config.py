@@ -164,9 +164,12 @@ class Settings(BaseSettings):
     # # validator below — written precisely to accept that form — never ran at all for env or
     # # .env sources. `NoDecode` turns the JSON step off and hands the raw string to the
     # # validator, which is where the parsing was always meant to happen.
-    llm_fallback_models: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["gpt-6-luna"]
-    )
+    # Empty by default, and that is the honest default. It used to be `["gpt-6-luna"]`, which
+    # is the primary model under ADR-017 — so `LLMClient._chain` de-duplicated it away and the
+    # chain was always length one. A config value that reads as "a fallback is configured"
+    # while providing none is worse than one that says there is nothing to fall back to.
+    # Set it to a *different* model to make the chain real: `LLM_FALLBACK_MODELS=gpt-6-sol`.
+    llm_fallback_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # ---- Prompts (ADR-006) ----
     prompt_version_answer: str = "v1"

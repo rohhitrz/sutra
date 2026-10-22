@@ -103,6 +103,12 @@ class GenerationRecord(BaseModel):
 
     model: str
     role: ModelRole | None = None
+    # Which pipeline stage made this call (`answer`, `rewrite`, `route`, `summarize`, ...).
+    # The span is already named by it; the record carries it too so the *role split* is
+    # auditable from the record alone — "the answer ran strong and the rewrite ran fast" is a
+    # claim about routing, and a record naming only the model cannot settle it when both roles
+    # resolve to the same model (ADR-017).
+    stage: str | None = None
     usage: Usage
     latency_ms: float
     attempts: int

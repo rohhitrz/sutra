@@ -114,11 +114,23 @@ class LLMClient:
         return self._settings.llm_strong
 
     def _chain(self, primary: str) -> list[str]:
-        """The primary model, then each configured fallback that is not already in the chain."""
+        """The primary model, then each configured fallback that is not already in the chain.
+
+        The de-duplication is what made `LLM_FALLBACK_MODELS=gpt-6-luna` a no-op for three
+        phases: it reads as a configured fallback and collapses to a chain of one against a
+        primary of the same name. It is still the right behaviour — falling back to the model
+        that just failed is not a fallback — so the drop is logged rather than silent, and the
+        default is now empty (see `Settings.llm_fallback_models`) so the config no longer
+        claims something it does not provide.
+        """
         chain = [primary]
         for candidate in self._settings.llm_fallback_models:
-            if candidate not in chain:
-                chain.append(candidate)
+            if candidate in chain:
+                logger.debug(
+                    "llm.fallback_ignored model=%s is already in the chain %s", candidate, chain
+                )
+                continue
+            chain.append(candidate)
         return chain
 
     def _price(self, raw: RawResult) -> Usage:
@@ -161,6 +173,7 @@ class LLMClient:
         started: float,
         attempts: int,
         used_fallback: bool,
+        stage: str | None = None,
         streamed: bool = False,
         error: str | None = None,
         prompt_version: str | None = None,
@@ -173,6 +186,7 @@ class LLMClient:
             GenerationRecord(
                 model=model,
                 role=role,
+                stage=stage,
                 usage=usage,
                 latency_ms=latency_ms,
                 attempts=attempts,
@@ -222,6 +236,7 @@ class LLMClient:
         started: float,
         model: str | None = None,
         prompt_version: str | None = None,
+        stage: str | None = None,
         input: Any = None,
     ) -> tuple[RawResult, int, bool]:
         """Walk the model chain. Within each model, retry transient failures; on exhaustion,
@@ -262,6 +277,7 @@ class LLMClient:
                         started=started,
                         attempts=attempts,
                         used_fallback=model_index > 0,
+                        stage=stage,
                         error=f"{type(exc).__name__}: {exc}",
                         prompt_version=prompt_version,
                         # A failed call has no output, and its prompt is the whole reason to
@@ -282,6 +298,7 @@ class LLMClient:
             started=started,
             attempts=attempts,
             used_fallback=len(chain) > 1,
+            stage=stage,
             error=f"{type(last_error).__name__}: {last_error}" if last_error else "exhausted",
             prompt_version=prompt_version,
             input=input,
@@ -327,6 +344,7 @@ class LLMClient:
                 started=started,
                 model=model,
                 prompt_version=prompt_version,
+                stage=stage,
                 input=prompt,
             )
             usage = self._price(raw)
@@ -337,6 +355,7 @@ class LLMClient:
                 started=started,
                 attempts=attempts,
                 used_fallback=used_fallback,
+                stage=stage,
                 prompt_version=prompt_version,
                 input=prompt,
                 output=raw.text,
@@ -384,6 +403,7 @@ class LLMClient:
                 started=started,
                 model=model,
                 prompt_version=prompt_version,
+                stage=stage,
                 input=prompt,
             )
             usage = self._price(raw)
@@ -394,6 +414,7 @@ class LLMClient:
                 started=started,
                 attempts=attempts,
                 used_fallback=used_fallback,
+                stage=stage,
                 prompt_version=prompt_version,
                 input=prompt,
                 # The raw JSON document, not `raw.parsed`. It is what the provider actually
@@ -478,6 +499,7 @@ class LLMClient:
                 started=started,
                 attempts=1,
                 used_fallback=False,
+                stage=stage,
                 streamed=True,
                 prompt_version=prompt_version,
                 metadata=(

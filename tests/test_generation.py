@@ -112,6 +112,16 @@ def test_the_system_half_of_the_prompt_is_identical_across_requests(loader: Prom
     assert first[1].content != second[1].content
 
 
+def test_the_stable_block_is_the_first_message(loader: PromptLoader):
+    """ARCHITECTURE §5 asks for the stable instructions *first* so the provider can cache them.
+    Byte-identical is necessary but not sufficient: a provider caches a **prefix**, so a stable
+    block sitting second is a stable block that never gets cached. Nothing else pins the
+    position, and the ordering is invisible in any output if it regresses."""
+    messages = split_prompt(loader.get(PROMPT_NAME), context="[1] a passage", question="q?")
+    assert messages[0].role == "system"
+    assert [m.role for m in messages] == ["system", "user"]
+
+
 def test_context_and_question_reach_the_user_message(loader: PromptLoader):
     messages = split_prompt(
         loader.get(PROMPT_NAME), context="[1] a passage", question="How many waystones?"
