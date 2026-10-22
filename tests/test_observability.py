@@ -369,6 +369,84 @@ def test_a_generation_span_withholds_both_when_capture_is_off():
     assert tracer.sent["usage_details"] == {"input": 10, "output": 4, "total": 14}
 
 
+# ----------------------------------- the request contextmanager (review finding)
+
+
+class _FakeObservation:
+    def __enter__(self) -> str:
+        return "span"
+
+    def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> bool:
+        self.exited_with = exc
+        return False
+
+
+class _FakeLangfuse:
+    """Just enough client for `LangfuseTracer.request`."""
+
+    def __init__(self, *, explode: bool = False) -> None:
+        self.explode = explode
+        self.observation = _FakeObservation()
+
+    def start_as_current_observation(self, **kwargs: object) -> _FakeObservation:
+        if self.explode:
+            raise RuntimeError("langfuse is down")
+        return self.observation
+
+    def get_current_trace_id(self) -> str:
+        return "t" * 32
+
+
+def _tracer_with(client: _FakeLangfuse) -> LangfuseTracer:
+    """A `LangfuseTracer` without the SDK, so `request` can be exercised offline."""
+    tracer = LangfuseTracer.__new__(LangfuseTracer)
+    tracer._capture_content = True
+    tracer._client = client  # type: ignore[assignment]
+    return tracer
+
+
+class _Boom(LookupError):
+    """Stands in for `SessionNotFound`, which is what actually hit this."""
+
+
+def test_request_lets_the_body_s_exception_through_unchanged():
+    """# CONCEPT: a `try` around a `@contextmanager`'s `yield` catches the *body's*
+    exception, because `contextlib` throws it in at the yield point. `request` used to do
+    that and then yield again, which `contextlib` turns into `RuntimeError: generator didn't
+    stop after throw()` — so `SessionNotFound` reached the route as a RuntimeError and a
+    foreign session id answered 500 instead of 404. The no-op tracer has a bare yield, which
+    is why the suite could not see it.
+    """
+    tracer = _tracer_with(_FakeLangfuse())
+    with pytest.raises(_Boom, match="nope"):
+        with tracer.request(name="chat", user_id="u"):
+            raise _Boom("nope")
+
+
+def test_request_closes_and_marks_the_span_before_re_raising():
+    """The span must still be closed, and told what went wrong, on the way out."""
+    client = _FakeLangfuse()
+    tracer = _tracer_with(client)
+    with pytest.raises(_Boom):
+        with tracer.request(name="chat"):
+            raise _Boom("nope")
+    assert isinstance(client.observation.exited_with, _Boom)
+
+
+def test_request_still_degrades_to_a_no_op_when_the_tracer_itself_breaks():
+    """The other half of the guarantee, which the fix must not cost."""
+    tracer = _tracer_with(_FakeLangfuse(explode=True))
+    with tracer.request(name="chat") as span:
+        span.update(output={"answer": "a"})  # must not raise
+
+
+def test_request_clears_the_trace_id_on_the_way_out():
+    tracer = _tracer_with(_FakeLangfuse())
+    with tracer.request(name="chat"):
+        assert ctx.get_trace_id() == "t" * 32
+    assert ctx.get_trace_id() is None
+
+
 # ------------------------------------------------------------- import ordering
 
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from sutra.config import Settings, get_settings
@@ -258,21 +258,48 @@ class LangfuseTracer:
         """
         from langfuse import propagate_attributes
 
+        # # CONCEPT: In a `@contextmanager`, an exception from the `with` body is thrown *into*
+        # # the generator at the `yield`. So a `try` that wraps the yield catches the body's
+        # # exception, not just the tracer's — and yielding a second time from the handler
+        # # makes `contextlib` raise `RuntimeError: generator didn't stop after throw()`,
+        # # destroying the original. This code used to do exactly that, and the comment here
+        # # asserted the opposite: `SessionNotFound` reached `/v1/chat`'s handler as a
+        # # RuntimeError, so a foreign session id answered 500 instead of 404. The test suite
+        # # could not see it because `NoOpTracer.request` has a bare yield.
+        #
+        # Setting up the three contexts is therefore kept separate from yielding inside them:
+        # only the setup is guarded, and the body's exception propagates untouched. `ExitStack`
+        # is what lets one `try` cover three nested enters without nesting the `yield` in it.
+        stack = ExitStack()
         try:
-            with propagate_attributes(
-                user_id=user_id, session_id=session_id, tags=tags, trace_name=name
-            ):
-                with self._client.start_as_current_observation(
+            stack.enter_context(
+                propagate_attributes(
+                    user_id=user_id, session_id=session_id, tags=tags, trace_name=name
+                )
+            )
+            span = stack.enter_context(
+                self._client.start_as_current_observation(
                     name=name, as_type="span", input=self._payload(input), metadata=metadata
-                ) as span:
-                    with bind_trace_id(self._client.get_current_trace_id()):
-                        yield _GatedStage(span, capture_content=self._capture_content)
+                )
+            )
+            stack.enter_context(bind_trace_id(self._client.get_current_trace_id()))
         except Exception:
-            # The request itself must survive a broken tracer. Note this catches failures in
-            # *tracing*; an exception from the wrapped body propagates through the inner
-            # `with` and is re-raised after the span is closed and marked.
+            # The request itself must survive a broken tracer. This now catches failures in
+            # *tracing* only, which is what it always claimed to do.
             logger.warning("tracing.request_failed name=%s", name, exc_info=True)
+            try:
+                stack.close()
+            except Exception:
+                # Unwinding a half-entered stack must not become the thing that fails the
+                # request either.
+                logger.warning("tracing.request_cleanup_failed name=%s", name, exc_info=True)
             yield _NullStage()
+            return
+
+        # Unwinding through `stack` hands the body's exception to the observation's own
+        # `__exit__`, so the span is still closed and marked before it is re-raised.
+        with stack:
+            yield _GatedStage(span, capture_content=self._capture_content)
 
     @contextmanager
     def stage(
