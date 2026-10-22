@@ -18,6 +18,19 @@ from sutra.llm.types import Message
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
+# Every event that ends a response stream. `response.completed` is the happy one;
+# `response.incomplete` is a truncation (the max_output_tokens case) and `response.failed` is
+# a provider-side error. All three carry usage, and all three are billed.
+TERMINAL_STREAM_EVENTS = frozenset({"response.completed", "response.incomplete", "response.failed"})
+
+
+def _incomplete_reason(response: object) -> str | None:
+    """The provider's reason for stopping early, when it stopped early."""
+    details = getattr(response, "incomplete_details", None)
+    reason = getattr(details, "reason", None)
+    return str(reason) if reason else None
+
+
 class RawResult(BaseModel):
     """What an adapter returns: provider-shaped data normalised, but not yet priced.
 
@@ -36,6 +49,12 @@ class RawResult(BaseModel):
     reasoning_tokens: int = 0
     response_id: str | None = None
     parsed: BaseModel | None = None
+    # The provider's terminal status, when it gave one. `complete` and `structured` raise on
+    # `incomplete` (see `_reject_if_truncated`); the streaming path cannot, because tokens are
+    # already out the door, so it records it instead and the caller decides. `None` means the
+    # non-streaming paths, which only ever return a status they did not object to.
+    status: str | None = None
+    incomplete_reason: str | None = None
 
 
 class LLMAdapter(Protocol):
@@ -231,7 +250,22 @@ class OpenAIAdapter:
                 if delta:
                     chunks.append(delta)
                     yield delta, None
-            elif etype == "response.completed":
+            elif etype in TERMINAL_STREAM_EVENTS:
+                # All three terminal events carry the same `response`, and the two that are
+                # not `completed` are the ones that cost money and used to be dropped:
+                # matching only `response.completed` left `final` unset, so the fallback
+                # below reported a *zero-usage* result and a truncated streamed answer was
+                # recorded as costing nothing. That is the failure known issue 10 describes —
+                # `max_output_tokens` budgets reasoning and visible output together, so a cap
+                # sized for the answer gets eaten by reasoning and the response comes back
+                # `incomplete` — and it is exactly the call whose cost you want to see.
+                #
+                # Unlike `complete`/`structured`, this does not raise on a truncated
+                # response. It cannot: tokens have already been handed to the caller, which
+                # is why there are no retries here either, and ADR-025 deliberately lets a
+                # truncated stream still yield the partial answer it managed to produce. The
+                # bug was the accounting, not the tolerance — so the status is recorded and
+                # the tokens are billed.
                 response = getattr(event, "response", None)
                 inp, out, cached, reasoning = self._usage_from(response)
                 final = RawResult(
@@ -246,12 +280,15 @@ class OpenAIAdapter:
                     # is parsed exactly like a non-streamed one rather than re-parsed from
                     # the text we happened to accumulate.
                     parsed=getattr(response, "output_parsed", None) if response else None,
+                    status=getattr(response, "status", None) if response else None,
+                    incomplete_reason=_incomplete_reason(response),
                 )
 
         if final is None:
-            # The stream ended without a completion event (e.g. a dropped connection). Report
-            # what we received rather than silently returning nothing.
-            final = RawResult(text="".join(chunks), model=model)
+            # The stream ended without *any* terminal event (e.g. a dropped connection), so
+            # there is no usage to report. Now genuinely that case, rather than also catching
+            # every truncated and failed response.
+            final = RawResult(text="".join(chunks), model=model, status="no_terminal_event")
         yield None, final
 
     async def _raw_stream_events(

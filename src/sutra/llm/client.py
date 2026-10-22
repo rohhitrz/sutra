@@ -166,6 +166,7 @@ class LLMClient:
         prompt_version: str | None = None,
         input: Any = None,
         output: Any = None,
+        metadata: dict[str, Any] | None = None,
     ) -> float:
         latency_ms = (time.perf_counter() - started) * 1000
         self._tracer.on_generation(
@@ -181,6 +182,7 @@ class LLMClient:
                 prompt_version=prompt_version,
                 input=input,
                 output=output,
+                metadata=metadata or {},
             )
         )
         return latency_ms
@@ -455,6 +457,20 @@ class LLMClient:
             if final is None:
                 final = RawResult(text="", model=resolved)
             usage = self._price(final)
+            # A stream that did not complete is not an exception here — tokens are already
+            # with the caller — but it must not be silent either. It was: the adapter dropped
+            # the terminal event entirely, so a truncated answer arrived priced at zero and
+            # looked like a clean short one.
+            if final.status and final.status != "completed":
+                logger.warning(
+                    "llm.stream_incomplete model=%s status=%s reason=%s output_tokens=%d "
+                    "reasoning_tokens=%d — the answer is truncated; raise max_output_tokens",
+                    final.model,
+                    final.status,
+                    final.incomplete_reason or "unknown",
+                    usage.output_tokens,
+                    usage.reasoning_tokens,
+                )
             self._trace(
                 model=final.model,
                 role=role,
@@ -464,6 +480,11 @@ class LLMClient:
                 used_fallback=False,
                 streamed=True,
                 prompt_version=prompt_version,
+                metadata=(
+                    {"status": final.status, "incomplete_reason": final.incomplete_reason}
+                    if final.status and final.status != "completed"
+                    else None
+                ),
                 input=self._as_prompt(messages),
                 # The accumulated text, recorded once at the end rather than per delta. A
                 # span updated on every token would be 400 writes for one generation.
