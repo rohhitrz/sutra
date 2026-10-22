@@ -3,10 +3,10 @@
 > Handoff file between chats. Read at the start of every chat. Update at the end of every chat.
 
 ## Current phase
-**Phase 5 — Generation, context management, memory** · Status: ⬜ not started
-(Phase 4 complete: Langfuse tracing, SSE streaming, feedback, JSON logs. The two items Phase 4
-left in front of Phase 5 — known issues 19 and 20 — are closed, as are four findings from the
-2026-10-22 review; see the next-step section.)
+**Phase 5 — Generation, context management, memory** · Status: 🟨 in progress — **steps 1-3 of 7 done**
+(Token budget, model routing/fallback auditability, and the answer.v1-vs-v2 A/B are built,
+measured and pushed. v2 was **not adopted** — the result is inside the noise band. Steps 4-7
+are short-term memory, long-term memory, the multi-turn eval, and the phase wrap-up.)
 
 ## Phase status
 
@@ -17,7 +17,7 @@ left in front of Phase 5 — known issues 19 and 20 — are closed, as are four 
 | 2 | Ingestion + naive RAG + eval harness | ✅ done | 2026-10-20 |
 | 3 | Advanced retrieval + routing + semantic cache | ✅ done | 2026-10-21 |
 | 4 | Observability | ✅ done | 2026-10-21 |
-| 5 | Generation, context management, memory | ⬜ | |
+| 5 | Generation, context management, memory | 🟨 steps 1-3/7 | 2026-10-22 |
 | 6 | Guardrails | ⬜ | |
 | 7 | Agentic RAG + MCP server | ⬜ | |
 | 8 | Voice agent | ⬜ | |
@@ -46,6 +46,11 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | 2026-10-21 | `advanced` re-run **after Phase 4 tracing** — no behaviour change intended | 78.2% | 83.3% | 0.565 | 0.976 | 0.821 | 3213 ms | $0.00121 |
 | 2026-10-21 | `advanced` **repeat**, rewrite still on — the comparison point for the row below | 78.2% | 83.3% | 0.570 | 0.988 | 0.821 | 2793 ms | $0.00119 |
 | **2026-10-21** | **`hyde_only` — `advanced` with query rewriting off. Now what `advanced` is.** | **79.0%** | **84.1%** | **0.574** | 0.964 | 0.821 | 2706 ms | $0.00093 |
+| 2026-10-22 | `advanced` **repeat** — the v1 arm of the answer.v2 A/B, and the budget's first run | 78.2% | 83.3% | 0.565 | 0.976¹ | 0.833 | 2917 ms | $0.00116 |
+| 2026-10-22 | `answer_v2` — **the v2 arm. Not adopted: inside the noise band.** | 79.0% | 84.9% | 0.571 | 0.988 | 0.845 | 2607 ms | $0.00120 |
+
+¹ Over **41 rows, not 42**: one `judge_faithfulness` call was lost to JSON
+truncation (new known issue 22). Not comparable to the row below it on equal terms.
 
 **The faithfulness column changes meaning at the last row.** Rows above it were graded by
 `judge_faithfulness.v1`; from step 4 onward the default is v2, which must quote the span
@@ -79,6 +84,84 @@ depend only on the index, which was verified byte-identical (same 49 chunks, sam
 token counts).
 
 The judge and latency columns moved for ordinary run-to-run reasons, not because of the fixes.
+
+### `answer.v2` versus `answer.v1` — a negative result, and v1 stays active
+
+**Verdict: no measurable difference. v2 is not adopted.** `prompt_version_answer` stays `v1`.
+`answer.v2` and `evals/profiles/answer_v2.yaml` are kept as the record of the experiment, the
+way `hyde_only.yaml` is.
+
+The hypothesis was specific and is written in `prompts/answer.v2.md`: **v1 over-refuses.** It
+came from `2026-10-21_advanced.run2`, where multi-hop scored correctness 0.50 against
+faithfulness 1.00 and 3 of 36 answerable rows were falsely refused. A refusal asserts nothing
+about the corpus, so it cannot be unfaithful — perfect faithfulness beside half correctness is
+what refusing looks like from outside. v2 rebalanced the refusal threshold toward synthesis and
+changed nothing else; a test compares the untouched sections of the two files so the A/B is one
+variable.
+
+Headline: **correctness 0.833 → 0.845, +0.012 against a noise band of at least ±0.05**
+(known issue 3). That is not a result. Per category, on a 42-row set where one row is worth
+0.167 in a 6-row category:
+
+| category | rows | correctness v1 → v2 | refusal_correct v1 → v2 |
+|---|---|---|---|
+| single-hop | 12 | 0.917 → 0.917 | 1.000 → 1.000 |
+| multi-hop | 8 | **0.562 → 0.562** | 0.750 → 0.875 |
+| temporal | 7 | 0.786 → 0.857 | 1.000 → 1.000 |
+| numeric | 6 | 1.000 → 1.000 | 1.000 → 1.000 |
+| unanswerable | 6 | 0.917 → 1.000 | **1.000 → 0.833** |
+| routing | 3 | 0.833 → 0.667 | 1.000 → 1.000 |
+
+**Three things this run established, none of them the thing it set out to test.**
+
+1. **The predicted gain did not happen.** Multi-hop correctness is identical in both arms. And
+   the 0.50 the hypothesis was built on was itself partly noise: the *same* `advanced` profile
+   scored 0.562 on multi-hop today against 0.500 on 2026-10-21. **The baseline moved on a
+   repeat by more than the effect being looked for**, which is known issue 3 doing exactly what
+   it warns about, on the first occasion it mattered.
+
+2. **The risk named in advance is the one that materialised, and it netted zero.** Falsely
+   refused went 2 → 1 of 36; correctly refused went 6 → 5 of 6. One row each way. v2 does
+   refuse less, and it traded one false refusal for one missed refusal. On this corpus that is
+   a wash, and the trade is worse than it looks: a missed refusal is a confident wrong answer,
+   a false refusal is a visible non-answer.
+
+3. **The cost and cache comparison between the arms is confounded and must not be read.**
+   v1 reported 0 cached input tokens, v2 reported 24,121. The tempting conclusion — v2's larger
+   prompt crossed OpenAI's 1024-token caching floor — is wrong. v1 ran *first*, against a cold
+   provider cache; v2 ran ~200s later, and the three judge prompts are byte-identical between
+   the arms, so v2 harvested a prefix that v1 paid to warm. Known issue 3b predicted this
+   precisely, and it would have produced a wrong conclusion here if read straight.
+
+**Also found, and worth its own attention: a judge call was lost to truncation.** v1's arm
+reports faithfulness over **41 rows, not 42** — one `judge_faithfulness` call returned invalid
+JSON, truncated mid-string at column 3526. That is known issue 10's `max_output_tokens`
+truncation arriving on the *judge* path rather than the answer path, where it had already been
+diagnosed. v1's 0.976 and v2's 0.988 are therefore over different row counts and are not
+strictly comparable. `MAX_JUDGE_TOKENS` needs raising — see the new known issue.
+
+### The token budget's estimator, measured (step 1 follow-up)
+
+`CHARS_PER_TOKEN = 3.6` is **conservative, and by much less than first claimed.** Measured on
+one real answer call per prompt version, estimate against the provider's reported
+`input_tokens`:
+
+| prompt | system block | estimated input | actual input | drift | implied chars/token |
+|---|---|---|---|---|---|
+| answer.v1 | 2018 chars | 3497 | 3363 | **+134** | 3.72 |
+| answer.v2 | 3349 chars | 3867 | 3666 | **+201** | 3.77 |
+
+So the real ratio on this prompt-and-passage mix is ~3.75, against an assumed 3.6 — roughly
+**4% headroom, not the "third" an earlier reading of known issue 7 suggested.** Known issue 7's
+"~425 tokens" for the stable block is stale: the real figure is ~540 for v1 and ~890 for v2,
+and **neither crosses the 1024-token caching floor.** Prompt caching therefore still does not
+pay for the answer call, and v2 being bigger did not change that.
+
+4% is thinner than intended but still the safe side, and `context_budget_safety = 0.9` sits in
+front of it. Left at 3.6 rather than tuned on two data points; the `budget.drift` log line is
+in place to accumulate more. **Note the runner suppresses it:** `evals.runners.run` logs at
+WARNING unless `-v` is passed, which is why the eval runs produced no drift lines and this
+measurement needed a separate script.
 
 ### Settling query rewriting (known issue 19, closed)
 
@@ -608,6 +691,46 @@ The blocking-embedder fix matters more from Phase 3 on than it did here: the cro
 reranker is far heavier than the embedder and lands on the same event loop. `embed_passages` in
 ingestion is still synchronous and deliberately so — it runs in a CLI script, not a request.
 
+## What was built (Phase 5, steps 1-3)
+
+**Step 1 — the token budget** (`f45f743`)
+
+- `src/sutra/generation/budget.py` — `fit_context`, `BudgetPlan`, `BudgetParts`, `HistoryTurn`,
+  `estimate_tokens`. ARCHITECTURE §5's budget and §5's trim order. The system block and the
+  question are not trimmable; the chunk trim floors at `context_min_chunks`.
+- `src/sutra/config.py` — `MODEL_CONTEXT_WINDOWS`, `DEFAULT_CONTEXT_WINDOW_TOKENS`,
+  `context_window_tokens()`, and `answer_reserve_tokens` / `context_budget_safety` /
+  `context_min_chunks`. The window table errs *small* where `MODEL_PRICES` and
+  `MODEL_CAPABILITIES` err permissive: an unknown price gives a wrong number, an unknown
+  window gives a rejected request.
+- `answer.py` / `stream.py` — both fit identically (ADR-025), `MAX_ANSWER_TOKENS` deleted,
+  `split_halves` extracted so the budget can price the system block before interpolation.
+  Citations resolve against the *trimmed* chunk list.
+- `answer.py` logs `budget.drift` per call: estimate beside the provider's `input_tokens`.
+- Tests: 13 new.
+
+**Step 2 — routing and fallback made auditable** (`78e03b3`)
+
+- `GenerationRecord.stage` — the span was already named by stage, the record was not, so
+  "the answer ran strong and the rewrite ran fast" was unfalsifiable while both roles resolve
+  to one model. Threaded through all six `_trace` call sites, success and failure.
+- `llm_fallback_models` now defaults to `[]`. See known issue 9 for what that fixed.
+- `contextualize.py` — the ingest-time prefix call was the last generation still arriving as
+  `llm.call`, and the highest-volume one at one call per chunk. Now `stage="context_prefix"`
+  with its prompt version.
+- `tests/test_model_routing.py` — §5's split pinned stage by stage, plus the chain's shape.
+- `tests/test_generation.py` — the stable block is message zero (a prefix cache needs it first,
+  and nothing asserted the position).
+
+**Step 3 — `answer.v2`, and grading moved to fast** (`d2d9a04`, numbers in the commit that follows it)
+
+- `prompts/answer.v2.md` + `evals/profiles/answer_v2.yaml` — one hypothesis, one variable, the
+  risk named in the profile header before the run. **Not adopted**; see the A/B section above.
+- `evals/metrics/judges.py` — `role="fast"`, as §5 puts grading there, with the consequence
+  written at the call site. Confirmed 9/10 against the hand labels after the move.
+- `tests/test_generation.py` — the contract test now runs over *every* shipped answer version,
+  and a test compares v1's and v2's untouched sections so the A/B stays one variable.
+
 ## What was built (after Phase 4, before Phase 5)
 
 Two known issues the first real look at the traces turned up (19 and 20), closed together.
@@ -826,18 +949,32 @@ closed known issues 19 and 20; the rest are Phase 4's.**
    it. Fine for a local dev server; belongs with the Phase 6 guardrail work. Also no rate
    limiting. (Streaming was the other half of this item and is done — Phase 4, ADR-025.)
 
-5. **No token budget.** `MAX_ANSWER_TOKENS` is a flat cap. ARCHITECTURE §5's real budget — system
-   + memory + history + chunks + answer reserve within the model window, with a defined trim
-   order — is Phase 5. At k=5 and 400-token chunks nothing comes near the window, so this is a
-   gap by schedule rather than oversight.
+5. ~~**No token budget.**~~ **Closed in Phase 5 step 1.** `generation/budget.py` implements
+   ARCHITECTURE §5's budget — system + memory + history + chunks + answer reserve against
+   window x safety — and §5's trim order: fewer chunks, then shorter history, then a truncated
+   summary. The system block and the question are never trimmed; the chunk trim stops at
+   `context_min_chunks` because zero passages is a refusal, not a cheaper answer.
+
+   **Two caveats that remain.** It *estimates* rather than tokenizes (measured at ~4% headroom
+   — see the estimator section above), and at k=5 nothing in traffic comes near the window, so
+   the trims are exercised by tests at an artificial limit rather than by real turns. Memory
+   (steps 4-5) is what makes history the first unbounded component and the trim order
+   load-bearing.
 
 6. **The HNSW index is not exercised.** With 49 chunks the planner filters on `index_version` and
    sorts instead (confirmed with `EXPLAIN`). The index is correct and will matter at volume, but
    nothing here tests HNSW's approximate-recall behaviour.
 
-7. **Prompt caching does not pay yet.** The stable system block is ~425 tokens and OpenAI caches
-   only prefixes above a 1024-token minimum. The ordering is the precondition, not a saving; it
-   starts paying once memory and guardrail instructions grow the stable block (Phases 5–6).
+7. **Prompt caching does not pay yet, and the block is bigger than this said.** The stable
+   system block measures **~540 tokens** for `answer.v1` (not the ~425 recorded here for two
+   phases) and ~890 for `answer.v2`, against OpenAI's 1024-token minimum. **Neither crosses
+   it**, so v2 being 1300 characters longer did not buy caching — measured, not assumed, in
+   the estimator section above.
+
+   The ordering remains the precondition rather than the saving, and a test now pins the part
+   that was unasserted: the stable block is message *zero*, because a provider caches a prefix
+   and a stable block sitting second never caches at all. Memory and guardrail instructions
+   (steps 4-5, Phase 6) are still what would push it over.
 
 8. ~~**The Langfuse stack has never been started.**~~ **Closed in Phase 4**, and it was right to
    budget time for it: two defects were waiting behind `docker compose config`, which
@@ -847,8 +984,22 @@ closed known issues 19 and 20; the rest are Phase 4's.**
    TLD, crash-looping the web container on every request. Both fixed and the stack verified
    end to end on Langfuse 4.67.0.
 
-9. **Fallback chain and model routing are still structural no-ops.** Both roles point at one
-   model (ADR-017), so `LLM_FALLBACK_MODELS` has nothing to fall back to.
+9. **Fallback chain and model routing are still structural no-ops — but no longer silent
+   ones.** Both roles point at one model (ADR-017), so the role split changes no output and
+   `LLM_FALLBACK_MODELS` has nothing to fall back to.
+
+   **What Phase 5 step 2 found:** the default was `["gpt-6-luna"]`, which *is* the primary
+   model, so `LLMClient._chain` de-duplicated it away and **no fallback has existed in any
+   phase** — while the config and `.env.example` both read as though one did. The default is
+   now empty, which states the same fact honestly, and a dropped duplicate is logged. The
+   chain's real behaviour was already covered by tests, including that a fallback answer is
+   priced at the answering model's rate.
+
+   Routing is now *auditable*: `GenerationRecord` carries `stage`, and
+   `tests/test_model_routing.py` pins §5's split stage by stage. Answering is the only stage
+   on `strong`; grading moved to `fast` as §5 specifies, with the consequence recorded at the
+   call site — **pointing `LLM_FAST` at a cheaper model silently weakens the instrument the
+   scoreboard is measured with**, and `make judges` is the check to re-run if that happens.
 
 10. **Two provider quirks are now encoded, and worth remembering.** `gpt-6-luna` rejects
     `temperature` outright (hence `MODEL_CAPABILITIES`), and `max_output_tokens` budgets
@@ -940,6 +1091,26 @@ closed known issues 19 and 20; the rest are Phase 4's.**
     seam the content fix could have used. Left in place rather than deleted — removing it needs
     the usual ask — but it should go.
 
+22. **`MAX_JUDGE_TOKENS` is too small, and a judge that truncates scores nothing.** On the
+    2026-10-22 `advanced` run, one of 42 `judge_faithfulness` calls returned invalid JSON —
+    truncated mid-string at column 3526 — so that row has no faithfulness score and the run's
+    mean is over 41 rows. This is known issue 10's reasoning-plus-output budget arriving on the
+    judge path, where `judge_faithfulness.v2` is the most exposed prompt in the system: it must
+    quote a supporting span per claim, so its output grows with the number of claims in the
+    answer. The failure is handled (the row is counted as failed, not scored 0, which would
+    have been worse) but it is silent in the headline number and it biases *which* rows get
+    graded — the longest, most claim-dense answers are the ones that fall out.
+
+    **Raise it, and re-run before trusting a faithfulness delta of this size.** Phase 3 hit the
+    same wall on the answer path and the fix was the same: size the cap for the worst case, not
+    the median.
+
+23. **An eval run's `budget.drift` lines are invisible by default.** `evals.runners.run`
+    configures logging at WARNING unless `-v` is passed, so the estimator-versus-actual line
+    added in Phase 5 step 1 produced nothing across two full runs. Measuring the estimator
+    needed a separate one-call script. Either the runner should log INFO by default or the
+    drift should go somewhere the report can see it; today it goes nowhere unless you ask.
+
 18. **The `meta` SSE frame departs from ARCHITECTURE §5 in two documented ways.** §5 describes
     it as "trace_id, cost, cache_hit". Cost is on `done` instead, because `meta` is sent before
     the answer call and the cost is not known until the provider finishes — a field that is
@@ -959,65 +1130,72 @@ closed known issues 19 and 20; the rest are Phase 4's.**
 
 ## Next step
 
-**Phase 4 is done, and so are both items it left in front of Phase 5.** Known issues 19 and
-20 are closed:
+**Phase 5 steps 1-3 are done, measured and pushed.** Continue with **step 4 — short-term
+memory**. The remaining steps, unchanged from the approved plan:
 
-- **Query rewriting is off.** Measured against a repeat of `advanced` with `hyde_only.yaml`;
-  neutral on every quality metric, so the 42 LLM calls, $0.0030 and 114s of model time per run
-  are gone. `advanced.yaml` now has `query_rewrite_enabled: false` and is settings-identical to
-  `hyde_only.yaml`.
-- **Generation spans record their prompts and completions**, gated by
-  `TRACING_CAPTURE_CONTENT` — which now gates span outputs generally, as it did not before.
+- **Step 4 — short-term memory.** Window + rolling summary. `memory/window.py`,
+  `memory/summarize.py`, a `summarize.v1` prompt on the **fast** role (§5), compaction resuming
+  from `session_summaries.covers_until_message_id`. Wire it into `chat.py`'s turn assembly and
+  into `fit_context`'s `summary=` / `history=` parameters, which already exist and are empty.
+- **Step 5 — long-term memory.** Extract → dedupe by cosine threshold → store → retrieve top 3
+  from `user_memories` (table exists, HNSW index exists, unused). Plus §6's pre-store PII and
+  secret filter. Facts about the **user**, not the corpus — this is not a second retrieval path.
+- **Step 6 — the multi-turn eval.** ~10 dialogues in `evals/datasets/multi_turn.jsonl`, written
+  only from `data/corpus/` facts and validated like the other datasets. Two metrics: follow-up
+  resolution and cross-session memory recall. **This is where the contextualize decision comes
+  due** — a history-aware query stage, gated on non-empty history, so Phase 3's measured
+  single-turn result (rewriting off) is untouched. New stage, so it wants an ADR.
+- **Step 7 — wrap-up.** `memory/` and `generation/` READMEs, `make eval`, scoreboard, PROGRESS.
 
-A second external review then raised four findings, all of which reproduced and are fixed
-(see the 2026-10-22 review-fixes section). One was a live 500 on `/v1/chat`, so it is worth
-knowing it is closed before building on top: **any exception under a traced request was being
-converted into `RuntimeError`**, which made a foreign session id a 500 instead of a 404.
+Carry these in:
 
-**Phase 5 starts clean.** Begin **Phase 5 — Generation, context management, memory** with the
-opening prompt in `docs/BUILD_PLAN.md`. Carry these in:
-
-- **The traces answer Phase 3's open latency question, and the answer is not retrieval.** On an
-  `advanced` turn, `retrieve` spends ~10.8s of which `route` is 3.8s, the query transforms 4.3s
-  and the cross-encoder 2.4s — while the actual hybrid search is **0.2s**. The model-backed
-  stages are the cost. No aggregate latency number in the eval reports could have said that,
-  and it is the first thing to look at if Phase 5 needs budget. **Those figures predate the
-  rewrite drop:** the transforms are now HyDE alone, which the traces price at 107–117s of
-  model time across 42 rows (~2.6s per row), so the transform share is roughly halved and the
-  cross-encoder is now the second-largest stage after the answer call.
-- **Phase 3's two unexplained results are now investigable.** Temporal lost 28.6pp at step 4 and
-  never recovered; multi-hop moved in both directions. Both are per-stage retrieval questions,
-  and each eval row now has a span tree. Filter Langfuse by `profile:advanced` and the row's
-  category and read `rerank`'s `max_rank_shift` and `promoted_from_outside_top_k`.
-- **Prompt caching should start paying in Phase 5** (known issue 7). The stable system block is
-  ~425 tokens against OpenAI's 1024-token minimum; memory and guardrail instructions are what
-  grow it past the threshold. The traces already record `cache_read_input_tokens` per
-  generation, so the moment it starts working will be visible rather than inferred.
-- **`.env` serves the naive baseline, not `advanced`.** `INDEX_VERSION=1` with hybrid, rerank,
-  HyDE and expansion all off, so `make dev` answers from slot 1 with vector-only retrieval while
-  `advanced.yaml` (slot 3, everything on) is the measured best. The eval runner is unaffected —
-  a profile overrides config by design — but a human poking the API gets Phase 2's quality.
-  **Decide in Phase 5 whether `.env.example` should default to the advanced configuration.**
-- **The semantic cache is still off**, now with its hit/miss events in place. Wiring it into
-  `/v1/chat` remains a deliberate, separate decision.
-- **`make cache`, `make judges` and `make coverage` remain preconditions, not extras.** `make
-  cache` caught a circular import this phase that the whole test suite could not see, because
-  pytest happens to import the modules in the one order that works.
+- **Known issue 22 is a precondition for step 6's numbers, not a nicety.** `MAX_JUDGE_TOKENS`
+  truncated one `judge_faithfulness` call in 42 on this run, and it is biased toward the
+  longest, most claim-dense answers — which is exactly what a multi-turn answer is. Raise it
+  before measuring anything in step 6, or the rows that fall out will be the rows that matter.
+- **Known issue 3 is not theoretical any more.** The `advanced` baseline's multi-hop
+  correctness moved 0.500 → 0.562 between two runs of identical code — more than the effect
+  step 3 was looking for. **Any step 4-6 generation claim needs repeats, or it needs to be
+  larger than ±0.05.** This is the single most important thing learned this chat.
+- **The budget is built but barely exercised.** Step 4 is what makes history unbounded and the
+  trim order real. The estimator has ~4% headroom (measured), so watch `budget.drift` once
+  summaries and memories are in the prompt — a summary is prose and should tokenize nearer 4.0
+  chars/token, but a memory list is short fragments and may tokenize denser.
+- **Prompt caching still does not pay** and the stable block is ~540 tokens, not the ~425 this
+  file claimed (known issue 7, corrected). Memory instructions in step 4 are the next
+  realistic chance of crossing 1024 — the traces already record `cache_read_input_tokens`, so
+  it will be visible rather than inferred. **Do not read a cached-token delta between two runs
+  as a property of the change** (known issue 3b, which nearly produced a wrong conclusion in
+  step 3).
+- **`.env` still serves the naive baseline** (`INDEX_VERSION=1`, everything off), so `make dev`
+  answers from slot 1 with vector-only retrieval. **Still undecided, and now overdue:** whether
+  `.env.example` should default to the advanced configuration. Step 7 is the last sensible
+  place for it.
+- **The semantic cache is still off.** Unchanged, deliberate, separate.
+- `make cache`, `make judges`, `make coverage` and `make validate` all pass as of this chat and
+  remain preconditions, not extras.
 
 Leftovers:
 
-- `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known issue 13).
-- `router_enabled` remains implemented, off, and documented as losing here. The companion
-  claim about `multi_query` was wrong for two phases; it is now *measured* and off, and the
-  profile header says what moved (known issue 19, closed). The stage itself stays in the tree
-  behind its flag, like routing.
-- `hyde_only.yaml` is settings-identical to `advanced.yaml` now that the flag has moved. Kept
-  deliberately as the ablation's record; say so rather than treating it as a duplicate to tidy.
-- `generation_scope` in `observability/tracing.py` is dead code (known issue 21).
-- The `--limit` report-overwrite guard is one-sided (known issue 14).
+- `docs/BUILD_PLAN.md` still carries whitespace-only editor changes, uncommitted (known issue
+  13). Deliberately not swept into any Phase 5 commit.
+- `answer.v2` and `answer_v2.yaml` are kept as the record of a negative result, like
+  `hyde_only.yaml`. `prompt_version_answer` stays `v1`.
+- `generation_scope` is still dead code (known issue 21); the `--limit` report-overwrite guard
+  is still one-sided (known issue 14) and bit this chat — it is why the drift measurement
+  needed a standalone script instead of a 2-row run.
 
 ## Session log
 <!-- newest first: date — phase — 2–4 line summary -->
+
+- **2026-10-22 — Phase 5 steps 1-3.** Built the §5 token budget with its trim order (closing
+  known issue 5), made the fast/strong split and the fallback chain auditable via
+  `GenerationRecord.stage` — finding that `LLM_FALLBACK_MODELS` had never provided a fallback
+  in any phase — and ran the `answer.v1` vs `answer.v2` A/B. **v2 not adopted:** +0.012
+  correctness against a ±0.05 noise band, and the predicted multi-hop gain did not appear.
+  Three incidental findings mattered more than the A/B: the baseline moved 0.500 → 0.562 on
+  multi-hop between identical runs, a judge call was lost to truncation (new known issue 22),
+  and the stable prompt block is ~540 tokens rather than the ~425 recorded since Phase 2.
 
 - **2026-10-22 — between 4 and 5 — four review findings, all real.**
   The serious one was a 500: `LangfuseTracer.request` had its `yield` inside
