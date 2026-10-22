@@ -15,7 +15,7 @@ from string import Template
 
 from sutra.config import Settings, get_settings
 from sutra.generation.schema import Answer, AnswerDraft, Citation
-from sutra.llm.client import LLMClient
+from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import Message
 from sutra.observability.tracing import stage
 from sutra.prompts import Prompt, PromptLoader
@@ -168,11 +168,13 @@ async def generate_answer(
 ) -> Answer:
     """Answer `question` from `chunks`, with citations resolved against those chunks."""
     settings = settings or get_settings()
-    client = client or LLMClient(settings)
     loader = loader or PromptLoader(settings=settings)
 
     prompt = loader.get(PROMPT_NAME)
     if not chunks:
+        # Before any client exists, deliberately. The old `client or LLMClient(settings)` ran
+        # above this line, so the one path that makes no model call was the one that built a
+        # provider SDK and a connection pool for nothing.
         return no_context_answer(prompt.version, settings.llm_strong)
 
     messages = split_prompt(prompt, context=format_context(chunks), question=question)
@@ -181,21 +183,27 @@ async def generate_answer(
     temperature = prompt.meta.get("temperature")
 
     started = time.perf_counter()
+    # `client_scope` rather than `client or LLMClient(...)`: the convenience idiom leaks the
+    # provider's connection pool on every call that falls through to it, which is why the
+    # router and the query transforms were moved off it. This path was missed. An injected
+    # client — which `/v1/chat` and the eval runner both pass — is yielded untouched and
+    # outlives this call, as it should.
     with stage(
         "generate",
         kind="span",
         input={"question": question, "passages": len(chunks)},
         metadata={"prompt_version": prompt.qualified_version},
     ) as span:
-        response = await client.structured(
-            messages,
-            AnswerDraft,
-            role="strong",
-            max_output_tokens=MAX_ANSWER_TOKENS,
-            temperature=float(temperature) if isinstance(temperature, int | float) else None,
-            stage="answer",
-            prompt_version=prompt.qualified_version,
-        )
+        async with client_scope(client, settings) as llm:
+            response = await llm.structured(
+                messages,
+                AnswerDraft,
+                role="strong",
+                max_output_tokens=MAX_ANSWER_TOKENS,
+                temperature=float(temperature) if isinstance(temperature, int | float) else None,
+                stage="answer",
+                prompt_version=prompt.qualified_version,
+            )
         elapsed_ms = (time.perf_counter() - started) * 1000
 
         draft = response.parsed

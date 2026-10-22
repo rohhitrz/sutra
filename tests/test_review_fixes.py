@@ -1,4 +1,4 @@
-"""The 2026-10-21 review findings, one test each.
+"""The 2026-10-21 and 2026-10-22 review findings, one test each.
 
 Each test is written against the *defect*, not the fix: it is the assertion that fails on the
 code as reviewed. Where a fix could be mistaken for simply tightening a check, a negative
@@ -8,7 +8,7 @@ is not a guard.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 
 import pytest
 from evals.runners.run_rag import Profile, slot_fingerprint
@@ -17,7 +17,10 @@ from pydantic import ValidationError
 from sutra.config import CONTEXT_PREFIX_BUDGET_TOKENS, EMBEDDING_MAX_SEQUENCE_TOKENS, Settings
 from sutra.ingestion.fingerprint import IndexFingerprint
 from sutra.ingestion.run import OccupiedSlot, _trim_prefixes_to_budget
+from sutra.llm.adapters import OpenAIAdapter, RawResult
 from sutra.llm.client import LLMClient, client_scope
+from sutra.llm.types import LLMResponse, Message
+from sutra.retrieval.search import RetrievedChunk
 
 # --------------------------------------------------------------------------- finding 1
 
@@ -280,3 +283,198 @@ def test_every_committed_profile_loads_under_forbid(name: str) -> None:
     """Negative control over the committed profiles: none of the Phase 3 runs was measuring a
     configuration other than the one its file names."""
     assert Profile.load(name).name
+
+
+# ===========================================================================================
+# The 2026-10-22 review. Findings 1 and 2 of that round live with their subjects, in
+# `test_observability.py` (the `request` contextmanager) and `test_api_feedback.py` (scoring
+# off the event loop); the two below have no closer home.
+# ===========================================================================================
+
+# --------------------------------------------------------- 2026-10-22, finding 3
+
+
+class _Usage:
+    def __init__(self, inp: int, out: int, reasoning: int = 0) -> None:
+        self.input_tokens = inp
+        self.output_tokens = out
+        self.input_tokens_details = type("D", (), {"cached_tokens": 0})()
+        self.output_tokens_details = type("D", (), {"reasoning_tokens": reasoning})()
+
+
+class _Response:
+    def __init__(self, status: str, *, reason: str | None = None) -> None:
+        self.id = "resp_1"
+        self.model = "gpt-6-luna"
+        self.status = status
+        self.usage = _Usage(900, 512, reasoning=500)
+        self.output_parsed = None
+        self.incomplete_details = type("I", (), {"reason": reason})() if reason else None
+
+
+class _Event:
+    def __init__(self, etype: str, response: object = None, delta: str = "") -> None:
+        self.type = etype
+        self.response = response
+        self.delta = delta
+
+
+def _adapter_streaming(events: list[_Event]) -> OpenAIAdapter:
+    """An `OpenAIAdapter` with the provider's event stream replaced."""
+    adapter = OpenAIAdapter.__new__(OpenAIAdapter)
+
+    async def fake_events(kwargs: dict[str, object], schema: object) -> AsyncIterator[object]:
+        for event in events:
+            yield event
+
+    adapter._raw_stream_events = fake_events  # type: ignore[method-assign,assignment]
+    return adapter
+
+
+async def _drain(adapter: OpenAIAdapter) -> RawResult:
+    final: RawResult | None = None
+    async for _delta, result in adapter.stream(
+        model="gpt-6-luna",
+        messages=[Message(role="user", content="q")],
+        max_output_tokens=512,
+        temperature=None,
+        timeout=10.0,
+    ):
+        if result is not None:
+            final = result
+    assert final is not None
+    return final
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("etype", "status"),
+    [("response.incomplete", "incomplete"), ("response.failed", "failed")],
+)
+async def test_a_stream_that_did_not_complete_is_still_billed(etype: str, status: str) -> None:
+    """The defect: the loop matched only `response.completed`, so `final` stayed unset and the
+    fallback reported a *zero-usage* result. A truncated streamed answer — the known-issue-10
+    case, where reasoning eats `max_output_tokens` — was recorded as costing nothing, which is
+    the one call whose cost you most want to see.
+    """
+    adapter = _adapter_streaming(
+        [
+            _Event("response.output_text.delta", delta='{"answer": "The Arch'),
+            _Event(etype, _Response(status, reason="max_output_tokens")),
+        ]
+    )
+    final = await _drain(adapter)
+
+    assert final.input_tokens == 900
+    assert final.output_tokens == 512
+    assert final.reasoning_tokens == 500
+    assert final.status == status
+    assert final.incomplete_reason == "max_output_tokens"
+    # The partial text still comes back: ADR-025 tolerates truncation on this path on purpose,
+    # since tokens are already with the caller. The bug was the accounting, not the tolerance.
+    assert final.text == '{"answer": "The Arch'
+
+
+@pytest.mark.asyncio
+async def test_a_completed_stream_is_unchanged() -> None:
+    """Negative control: widening the match must not alter the happy path."""
+    adapter = _adapter_streaming(
+        [
+            _Event("response.output_text.delta", delta="hello"),
+            _Event("response.completed", _Response("completed")),
+        ]
+    )
+    final = await _drain(adapter)
+    assert final.text == "hello"
+    assert final.output_tokens == 512
+    assert final.status == "completed"
+    assert final.incomplete_reason is None
+
+
+@pytest.mark.asyncio
+async def test_a_stream_with_no_terminal_event_at_all_still_reports_what_arrived() -> None:
+    """A dropped connection. Now genuinely the only case the zero-usage fallback covers."""
+    adapter = _adapter_streaming([_Event("response.output_text.delta", delta="half")])
+    final = await _drain(adapter)
+    assert final.text == "half"
+    assert final.input_tokens == 0
+    assert final.status == "no_terminal_event"
+
+
+# --------------------------------------------------------- 2026-10-22, finding 4
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_closes_a_client_it_had_to_build(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`client_scope` reached the router and the transforms but not the generation paths, which
+    kept `client or LLMClient(...)` and so leaked a pool per call."""
+    import sutra.generation.answer as answer_module
+
+    adapter = _Adapter()
+    built: list[object] = []
+
+    class _Tracked(LLMClient):
+        def __init__(self, settings: Settings | None = None) -> None:
+            super().__init__(settings=settings, adapter=adapter)  # type: ignore[arg-type]
+            built.append(self)
+
+        async def structured(self, *a: object, **k: object) -> LLMResponse:
+            raise RuntimeError("stop here; ownership is what is under test")
+
+    import sutra.llm.client as client_module
+
+    # Both names, deliberately. `client_scope` resolves `LLMClient` in its own module, but
+    # `answer.py` imported the name directly, so patching only one lets the *unfixed* code
+    # build a real client and reach the provider — a test that fails by making a paid API
+    # call is not a test. Patching both means this can only ever fail as an assertion.
+    monkeypatch.setattr(client_module, "LLMClient", _Tracked)
+    monkeypatch.setattr(answer_module, "LLMClient", _Tracked)
+
+    with pytest.raises(RuntimeError, match="stop here"):
+        await answer_module.generate_answer(
+            "q",
+            [
+                RetrievedChunk(
+                    chunk_id="c1",
+                    doc_slug="d",
+                    doc_title="D",
+                    doc_type="story",
+                    chunk_no=1,
+                    heading=None,
+                    text="t",
+                    token_count=1,
+                    score=1.0,
+                    rank=1,
+                )
+            ],
+            settings=settings,
+        )
+
+    assert built, "no client was built, so this test is not exercising the fallback path"
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_the_no_context_short_circuit_builds_no_client_at_all(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one path that makes no model call used to be the one that built a provider SDK for
+    nothing, because the client was created above the `if not chunks` return."""
+    built: list[object] = []
+
+    class _Tracked(LLMClient):
+        def __init__(self, settings: Settings | None = None) -> None:
+            built.append(self)
+            super().__init__(settings=settings, adapter=_Adapter())  # type: ignore[arg-type]
+
+    import sutra.generation.answer as answer_module
+    import sutra.llm.client as client_module
+
+    monkeypatch.setattr(client_module, "LLMClient", _Tracked)
+    monkeypatch.setattr(answer_module, "LLMClient", _Tracked)
+
+    result = await answer_module.generate_answer("q", [], settings=settings)
+    assert result.short_circuited is True
+    assert built == []

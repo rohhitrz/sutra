@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from sutra.config import Settings, get_settings
 from sutra.generation.answer import split_prompt
-from sutra.llm.client import LLMClient
+from sutra.llm.client import LLMClient, client_scope
 from sutra.prompts import PromptLoader
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,6 @@ async def run_judge(
 ) -> JudgeResult:
     """Grade one answer on one axis."""
     settings = settings or get_settings()
-    client = client or LLMClient(settings)
     loader = loader or PromptLoader(settings=settings)
     prompt = loader.get(_prompt_name(name))
 
@@ -216,16 +215,21 @@ async def run_judge(
 
     try:
         messages = split_prompt(prompt, **variables)
-        response = await client.structured(
-            messages,
-            schema,
-            role="strong",
-            max_output_tokens=MAX_JUDGE_TOKENS,
-            # Named so a row's three judges are distinguishable in the trace instead of
-            # arriving as three spans all called `llm.call`.
-            stage=f"judge_{name}",
-            prompt_version=prompt.qualified_version,
-        )
+        # `client_scope` rather than `client or LLMClient(...)`, which leaked a connection
+        # pool per judge call on any path that did not inject one. `run_judges` opens one
+        # scope around all three, so a row's judges share a pool; this is the fallback for a
+        # direct caller, and it yields an injected client untouched.
+        async with client_scope(client, settings) as llm:
+            response = await llm.structured(
+                messages,
+                schema,
+                role="strong",
+                max_output_tokens=MAX_JUDGE_TOKENS,
+                # Named so a row's three judges are distinguishable in the trace instead of
+                # arriving as three spans all called `llm.call`.
+                stage=f"judge_{name}",
+                prompt_version=prompt.qualified_version,
+            )
         verdict = response.parsed
         if not isinstance(verdict, schema):
             msg = f"judge {name} returned {type(verdict).__name__}"
@@ -284,21 +288,26 @@ async def run_judges(
     settings: Settings | None = None,
 ) -> JudgeScores:
     """Run the judges for one row, concurrently — they are independent of one another."""
-    results = await asyncio.gather(
-        *(
-            run_judge(
-                name,
-                question=question,
-                answer=answer,
-                context=context,
-                reference=reference,
-                client=client,
-                loader=loader,
-                settings=settings,
+    settings = settings or get_settings()
+    # One client for all three, rather than one each. The judges fan out concurrently, so
+    # without this a row with no injected client would open three provider connection pools
+    # to make three calls — the same reasoning as `_search_inner`'s shared client.
+    async with client_scope(client, settings) as llm:
+        results = await asyncio.gather(
+            *(
+                run_judge(
+                    name,
+                    question=question,
+                    answer=answer,
+                    context=context,
+                    reference=reference,
+                    client=llm,
+                    loader=loader,
+                    settings=settings,
+                )
+                for name in names
             )
-            for name in names
         )
-    )
     return JudgeScores(results=list(results))
 
 

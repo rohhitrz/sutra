@@ -30,7 +30,7 @@ from sutra.generation.answer import (
 )
 from sutra.generation.partial_json import StringFieldStreamer, extract_string_field
 from sutra.generation.schema import Answer, AnswerDraft
-from sutra.llm.client import LLMClient
+from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import StreamDelta, StreamDone, Usage
 from sutra.observability.tracing import stage
 from sutra.prompts import PromptLoader
@@ -72,13 +72,13 @@ async def generate_answer_stream(
     from an absent event.
     """
     settings = settings or get_settings()
-    client = client or LLMClient(settings)
     loader = loader or PromptLoader(settings=settings)
 
     prompt = loader.get(PROMPT_NAME)
     if not chunks:
         # Same short circuit as the non-streaming path: nothing was retrieved, so the honest
-        # answer is already known and paying for a call to produce it is waste.
+        # answer is already known and paying for a call to produce it is waste. And, as
+        # there, no client is built above this line to pay for it with.
         yield AnswerComplete(answer=no_context_answer(prompt.version, settings.llm_strong))
         return
 
@@ -90,28 +90,34 @@ async def generate_answer_stream(
     raw_text = ""
     done: StreamDone | None = None
 
+    # `client_scope`, as in the buffered path and for the same reason. Here it has to wrap
+    # the whole stream rather than one call: the client must stay open until the last token
+    # has arrived. Closing it is tied to this generator finishing — exhausted normally, or
+    # `aclose()`d when a consumer walks away mid-stream, which `sutra.api.streaming.guarded`
+    # is what makes reliable for the SSE path.
     with stage(
         "generate",
         kind="span",
         input={"question": question, "passages": len(chunks)},
         metadata={"prompt_version": prompt.qualified_version, "streamed": True},
     ) as span:
-        async for event in client.stream(
-            messages,
-            role="strong",
-            max_output_tokens=MAX_ANSWER_TOKENS,
-            temperature=float(temperature) if isinstance(temperature, int | float) else None,
-            stage="answer",
-            prompt_version=prompt.qualified_version,
-            schema=AnswerDraft,
-        ):
-            if isinstance(event, StreamDelta):
-                raw_text += event.text
-                text = streamer.feed(event.text)
-                if text:
-                    yield AnswerToken(text=text)
-            elif isinstance(event, StreamDone):
-                done = event
+        async with client_scope(client, settings) as llm:
+            async for event in llm.stream(
+                messages,
+                role="strong",
+                max_output_tokens=MAX_ANSWER_TOKENS,
+                temperature=float(temperature) if isinstance(temperature, int | float) else None,
+                stage="answer",
+                prompt_version=prompt.qualified_version,
+                schema=AnswerDraft,
+            ):
+                if isinstance(event, StreamDelta):
+                    raw_text += event.text
+                    text = streamer.feed(event.text)
+                    if text:
+                        yield AnswerToken(text=text)
+                elif isinstance(event, StreamDone):
+                    done = event
 
         answer = _finalise(
             done=done,
