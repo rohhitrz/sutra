@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from string import Template
 
 from sutra.config import Settings, get_settings
+from sutra.generation.budget import HistoryTurn, fit_context
 from sutra.generation.schema import Answer, AnswerDraft, Citation
 from sutra.llm.client import LLMClient, client_scope
 from sutra.llm.types import Message
@@ -38,18 +39,6 @@ PROMPT_NAME = "answer"
 # stable block past that floor.
 USER_DELIMITER = "<<<USER>>>"
 
-# Room for reasoning as well as the answer. `max_output_tokens` budgets both together, so a cap
-# sized for the prose you want to read can be consumed entirely by reasoning, leaving a truncated
-# body that a schema-constrained call reports as invalid JSON. The judges hit exactly that during
-# the first full eval run. Phase 5 replaces this with a real token budget (ARCHITECTURE §5) that
-# trims context to fit the model window.
-#
-# Raised 2000 -> 4000 in Phase 3 step 1. Larger context passages make the model reason longer,
-# and at 2000 a row occasionally spent the entire budget on reasoning and returned a truncated
-# body — stochastically, so the same configuration passed one run and failed the next. The cap
-# has to clear the worst case, not the median, or the harness fails at random.
-MAX_ANSWER_TOKENS = 4000
-
 
 def format_context(chunks: Sequence[RetrievedChunk]) -> str:
     """Number the passages so the model has a stable, checkable handle on each one.
@@ -67,6 +56,24 @@ def format_context(chunks: Sequence[RetrievedChunk]) -> str:
     return "\n\n".join(blocks)
 
 
+def split_halves(prompt: Prompt) -> tuple[str, str]:
+    """The stable system half and the per-request user half, as raw text.
+
+    Separated out because the token budget has to price the system block *before* anything is
+    interpolated into the other half — the two callers would otherwise each re-split the file
+    and could disagree about where the boundary is.
+    """
+    if USER_DELIMITER not in prompt.body:
+        msg = (
+            f"prompt {prompt.name}.{prompt.version} is missing the {USER_DELIMITER!r} delimiter "
+            f"at {prompt.path}"
+        )
+        raise ValueError(msg)
+
+    system_part, user_part = prompt.body.split(USER_DELIMITER, 1)
+    return system_part.strip(), user_part.strip()
+
+
 def split_prompt(prompt: Prompt, **variables: str) -> list[Message]:
     """Build the message list from one versioned prompt file.
 
@@ -79,20 +86,10 @@ def split_prompt(prompt: Prompt, **variables: str) -> list[Message]:
     share this one function. `Template.substitute` raises on a missing key, so a rubric edit that
     introduces a variable nobody passes fails loudly instead of rendering a half-built prompt.
     """
-    if USER_DELIMITER not in prompt.body:
-        msg = (
-            f"prompt {prompt.name}.{prompt.version} is missing the {USER_DELIMITER!r} delimiter "
-            f"at {prompt.path}"
-        )
-        raise ValueError(msg)
-
-    system_part, user_part = prompt.body.split(USER_DELIMITER, 1)
+    system_part, user_part = split_halves(prompt)
     return [
-        Message(role="system", content=system_part.strip()),
-        Message(
-            role="user",
-            content=Template(user_part.strip()).substitute(**variables),
-        ),
+        Message(role="system", content=system_part),
+        Message(role="user", content=Template(user_part).substitute(**variables)),
     ]
 
 
@@ -165,8 +162,17 @@ async def generate_answer(
     client: LLMClient | None = None,
     loader: PromptLoader | None = None,
     settings: Settings | None = None,
+    memories: Sequence[str] = (),
+    summary: str = "",
+    history: Sequence[HistoryTurn] = (),
 ) -> Answer:
-    """Answer `question` from `chunks`, with citations resolved against those chunks."""
+    """Answer `question` from `chunks`, with citations resolved against those chunks.
+
+    `memories`, `summary` and `history` are empty until Phase 5's memory steps fill them. They
+    are in the signature now because the budget has to price them: adding the parameters later
+    would mean every caller that had been fitting without them was fitting against the wrong
+    total.
+    """
     settings = settings or get_settings()
     loader = loader or PromptLoader(settings=settings)
 
@@ -176,6 +182,19 @@ async def generate_answer(
         # above this line, so the one path that makes no model call was the one that built a
         # provider SDK and a connection pool for nothing.
         return no_context_answer(prompt.version, settings.llm_strong)
+
+    # Fit before rendering. Trimming a rendered prompt means re-rendering it, and "drop the
+    # lowest-ranked passage" is only expressible while the passages are still a list.
+    plan = fit_context(
+        system=split_halves(prompt)[0],
+        question=question,
+        chunks=chunks,
+        memories=memories,
+        summary=summary,
+        history=history,
+        settings=settings,
+    )
+    chunks = plan.chunks
 
     messages = split_prompt(prompt, context=format_context(chunks), question=question)
     # The prompt file's own front-matter carries the temperature, so changing it is a prompt
@@ -192,14 +211,14 @@ async def generate_answer(
         "generate",
         kind="span",
         input={"question": question, "passages": len(chunks)},
-        metadata={"prompt_version": prompt.qualified_version},
+        metadata={"prompt_version": prompt.qualified_version, **plan.as_metadata()},
     ) as span:
         async with client_scope(client, settings) as llm:
             response = await llm.structured(
                 messages,
                 AnswerDraft,
                 role="strong",
-                max_output_tokens=MAX_ANSWER_TOKENS,
+                max_output_tokens=settings.answer_reserve_tokens,
                 temperature=float(temperature) if isinstance(temperature, int | float) else None,
                 stage="answer",
                 prompt_version=prompt.qualified_version,
@@ -210,6 +229,23 @@ async def generate_answer(
         if not isinstance(draft, AnswerDraft):
             msg = f"structured call returned {type(draft).__name__}, expected AnswerDraft"
             raise TypeError(msg)
+
+        # The estimator checking itself. `plan.parts.input_tokens` is what the budget believed
+        # this request would cost; `response.usage.input_tokens` is what it cost. Logging the
+        # pair on every call is what keeps CHARS_PER_TOKEN a measurement instead of a belief —
+        # and a *negative* drift is the dangerous direction, because it means the budget has
+        # been under-counting and the window is nearer than it looks.
+        actual_input = response.usage.input_tokens
+        if actual_input:
+            logger.info(
+                "budget.drift",
+                extra={
+                    "estimated_input_tokens": plan.parts.input_tokens,
+                    "actual_input_tokens": actual_input,
+                    "drift_tokens": plan.parts.input_tokens - actual_input,
+                    "estimator_is_conservative": plan.parts.input_tokens >= actual_input,
+                },
+            )
 
         citations, dropped = resolve_citations(draft, chunks)
         span.update(

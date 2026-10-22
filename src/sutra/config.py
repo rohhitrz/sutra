@@ -53,6 +53,31 @@ MODEL_PRICES: dict[str, ModelPrice] = {
 LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
 
 
+# # CONCEPT: The context window is the one model fact where a permissive default is dangerous.
+# # An unknown price produces a wrong cost number; an unknown window produces a rejected
+# # request at the worst possible moment. So `MODEL_PRICES` and `MODEL_CAPABILITIES` assume the
+# # conventional thing about a model they do not know, and this table assumes the small thing.
+#
+# 272K is not a guess: it is the short-context threshold ADR-017 verified from the published
+# price list, so it is a window these models are known to reach. Treating it as *the* window is
+# conservative twice over — any headroom above it goes unused, and a request that stays under it
+# also stays on the cheaper short-context rate.
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "gpt-6-luna": LONG_CONTEXT_THRESHOLD_TOKENS,
+    "gpt-6-sol": LONG_CONTEXT_THRESHOLD_TOKENS,
+    "gpt-6.1-sol": LONG_CONTEXT_THRESHOLD_TOKENS,
+    "gpt-6-astra": LONG_CONTEXT_THRESHOLD_TOKENS,
+}
+
+# A floor for a model nobody has entered above, low enough to be safe with any current model.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
+
+
+def context_window_tokens(model: str) -> int:
+    """The window to budget against for `model`, erring small for one we do not know."""
+    return MODEL_CONTEXT_WINDOWS.get(model, DEFAULT_CONTEXT_WINDOW_TOKENS)
+
+
 class ModelCapabilities(BaseModel):
     """What a model will accept, as opposed to what it costs.
 
@@ -159,6 +184,22 @@ class Settings(BaseSettings):
     prompt_version_query_transform: str = "v1"
     prompt_version_hyde: str = "v1"
     prompt_version_router: str = "v1"
+
+    # ---- Generation & context budget (ARCHITECTURE §5, Phase 5) ----
+    # # CONCEPT: The answer reserve is part of the *input* budget, not separate from it. The
+    # # provider bills reasoning and visible output against one `max_output_tokens` cap, so a
+    # # context assembled to fill the window leaves the answer no room to be written in.
+    # Replaces the flat `MAX_ANSWER_TOKENS` constant Phase 2 shipped. 4000 is where Phase 3
+    # step 1 had to raise it: larger passages make the model reason longer, and at 2000 a row
+    # occasionally spent the whole budget reasoning and returned a truncated body.
+    answer_reserve_tokens: int = Field(default=4000, gt=0)
+    # Headroom against an estimated token count. `generation/budget.py` estimates rather than
+    # tokenizes, and this is the margin that absorbs the estimate being wrong in the unsafe
+    # direction — along with anything the provider adds that no local count can see.
+    context_budget_safety: float = Field(default=0.9, gt=0.0, le=1.0)
+    # The floor the chunk trim stops at. Zero passages is not a cheaper answer, it is a
+    # refusal, so the budget never trims a turn into one.
+    context_min_chunks: int = Field(default=1, ge=0)
 
     # ---- Retrieval / ingestion ----
     # # CONCEPT: Index versioning — re-ingesting under a new version lets old chunks keep serving

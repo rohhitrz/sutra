@@ -21,13 +21,14 @@ from pydantic import BaseModel
 
 from sutra.config import Settings, get_settings
 from sutra.generation.answer import (
-    MAX_ANSWER_TOKENS,
     PROMPT_NAME,
     format_context,
     no_context_answer,
     resolve_citations,
+    split_halves,
     split_prompt,
 )
+from sutra.generation.budget import HistoryTurn, fit_context
 from sutra.generation.partial_json import StringFieldStreamer, extract_string_field
 from sutra.generation.schema import Answer, AnswerDraft
 from sutra.llm.client import LLMClient, client_scope
@@ -63,6 +64,9 @@ async def generate_answer_stream(
     client: LLMClient | None = None,
     loader: PromptLoader | None = None,
     settings: Settings | None = None,
+    memories: Sequence[str] = (),
+    summary: str = "",
+    history: Sequence[HistoryTurn] = (),
 ) -> AsyncIterator[AnswerStreamEvent]:
     """Yield answer text as it arrives, then one `AnswerComplete`.
 
@@ -82,6 +86,20 @@ async def generate_answer_stream(
         yield AnswerComplete(answer=no_context_answer(prompt.version, settings.llm_strong))
         return
 
+    # The same fit as the buffered path, for the same reason the prompt and schema are the
+    # same one (ADR-025): a streamed turn that trimmed differently would be a second answer
+    # path whose quality no eval describes.
+    plan = fit_context(
+        system=split_halves(prompt)[0],
+        question=question,
+        chunks=chunks,
+        memories=memories,
+        summary=summary,
+        history=history,
+        settings=settings,
+    )
+    chunks = plan.chunks
+
     messages = split_prompt(prompt, context=format_context(chunks), question=question)
     temperature = prompt.meta.get("temperature")
 
@@ -99,13 +117,17 @@ async def generate_answer_stream(
         "generate",
         kind="span",
         input={"question": question, "passages": len(chunks)},
-        metadata={"prompt_version": prompt.qualified_version, "streamed": True},
+        metadata={
+            "prompt_version": prompt.qualified_version,
+            "streamed": True,
+            **plan.as_metadata(),
+        },
     ) as span:
         async with client_scope(client, settings) as llm:
             async for event in llm.stream(
                 messages,
                 role="strong",
-                max_output_tokens=MAX_ANSWER_TOKENS,
+                max_output_tokens=settings.answer_reserve_tokens,
                 temperature=float(temperature) if isinstance(temperature, int | float) else None,
                 stage="answer",
                 prompt_version=prompt.qualified_version,

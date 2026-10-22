@@ -47,10 +47,18 @@ evals — prompt hygiene is not a guardrail, and Phase 6 adds the actual detecti
 but a baseline that can be hijacked by its own corpus would not be measuring retrieval.
 
 ## Tradeoffs
-- **No token budget yet.** `MAX_ANSWER_TOKENS` is a flat cap; ARCHITECTURE §5's real budget —
-  system + memory + history + chunks + answer reserve within the model window, with a defined
-  trim order — is Phase 5. With k=5 and 400-token chunks nothing comes close to the window, so
-  this is a gap by schedule rather than by oversight.
+- **The token budget estimates rather than tokenizes** (`budget.py`, Phase 5). We have no local
+  copy of the provider's tokenizer, so `CHARS_PER_TOKEN` is a divisor chosen to err high: unused
+  window is cheap, an overflowed request is a 400. Every answer call logs `budget.drift` — the
+  estimate beside the provider's reported `input_tokens` — so the divisor stays a measurement.
+  **Not yet calibrated against a full eval run.**
+- **The trim order is a judgement, and it is ARCHITECTURE §5's**: fewer chunks → shorter history
+  → shorter summary. It assumes the lowest-ranked passage is the cheapest thing to lose and that
+  the rolling summary is already carrying the turns the window drops. Both hold for this corpus;
+  neither is self-evident. The system block and the question are never trimmed.
+- **Nothing here comes near the window yet.** At k=5 and 400-token chunks a turn costs a few
+  thousand tokens against a 272K budget, so the trims are exercised by tests at a tiny window
+  rather than by traffic. That is a property of the corpus, not evidence the budget is unneeded.
 - **Confidence is self-reported**, so it measures the model's disposition as much as the
   evidence. It is recorded rather than acted on; nothing branches on it in Phase 2.
 - **Non-streaming.** `POST /v1/chat` returns JSON; SSE arrives with the streaming work in a later
